@@ -10,7 +10,8 @@ app.use(cors());
 
 // ===== DATABASE =====
 mongoose.connect(process.env.MONGO_URI)
-.then(() => console.log("MongoDB Connected"));
+.then(() => console.log("MongoDB Connected"))
+.catch(err => console.log(err));
 
 // ===== MODELS =====
 const User = mongoose.model("User", {
@@ -31,8 +32,7 @@ const Order = mongoose.model("Order", {
   service: String,
   link: String,
   quantity: Number,
-  status: String,
-  providerOrderId: String
+  status: String
 });
 
 // ===== AUTH =====
@@ -47,29 +47,31 @@ function auth(req, res, next) {
   }
 }
 
-// ===== REGISTER =====
+// ===== ROUTES =====
+
+// Register
 app.post("/register", async (req, res) => {
   const user = new User(req.body);
   await user.save();
-  res.json({ message: "Registered" });
+  res.json({ message: "Registered successfully" });
 });
 
-// ===== LOGIN =====
+// Login
 app.post("/login", async (req, res) => {
   const user = await User.findOne(req.body);
-  if (!user) return res.json({ error: "Invalid" });
+  if (!user) return res.json({ error: "Invalid login" });
 
   const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET);
   res.json({ token });
 });
 
-// ===== BALANCE =====
+// Balance
 app.get("/balance", auth, async (req, res) => {
   const user = await User.findById(req.user.id);
   res.json({ balance: user.balance });
 });
 
-// ===== DEPOSIT =====
+// Deposit
 app.post("/deposit", auth, async (req, res) => {
   const d = new Deposit({
     userId: req.user.id,
@@ -77,14 +79,10 @@ app.post("/deposit", auth, async (req, res) => {
     code: req.body.code
   });
   await d.save();
-  res.json({ message: "Submitted" });
+  res.json({ message: "Deposit submitted" });
 });
 
-// ===== ADMIN =====
-app.get("/admin/deposits", async (req, res) => {
-  res.json(await Deposit.find());
-});
-
+// Admin approve deposit
 app.post("/admin/approve", async (req, res) => {
   const d = await Deposit.findById(req.body.id);
 
@@ -98,56 +96,41 @@ app.post("/admin/approve", async (req, res) => {
   res.json({ message: "Approved" });
 });
 
-// ===== SMM API CONFIG =====
-const API_URL = process.env.SMM_API_URL;
-const API_KEY = process.env.SMM_API_KEY;
-
-// ===== GET SERVICES =====
-app.get("/services", async (req, res) => {
-  try {
-    const response = await axios.post(API_URL, {
-      key: API_KEY,
-      action: "services"
-    });
-
-    res.json(response.data);
-  } catch (err) {
-    res.json({ error: "Failed to load services" });
-  }
-});
-
-// ===== ORDER (REAL API) =====
+// ===== SMM ORDER =====
 app.post("/order", auth, async (req, res) => {
-  const { service, link, quantity } = req.body;
-
   try {
-    const api = await axios.post(API_URL, {
-      key: API_KEY,
+    const { service, link, quantity } = req.body;
+
+    const response = await axios.post(process.env.SMM_API_URL, {
+      key: process.env.SMM_API_KEY,
       action: "add",
       service,
       link,
       quantity
     });
 
-    const order = new Order({
+    const o = new Order({
       userId: req.user.id,
       service,
       link,
       quantity,
-      status: "Processing",
-      providerOrderId: api.data.order
+      status: "Processing"
     });
 
-    await order.save();
+    await o.save();
 
-    res.json({ message: "Order placed", provider: api.data });
+    res.json({
+      message: "Order placed successfully",
+      providerOrderId: response.data.order
+    });
 
-  } catch (err) {
+  } catch (error) {
+    console.log(error);
     res.json({ error: "Order failed" });
   }
 });
 
-// ===== USER ORDERS =====
+// Get orders
 app.get("/orders", auth, async (req, res) => {
   res.json(await Order.find({ userId: req.user.id }));
 });
