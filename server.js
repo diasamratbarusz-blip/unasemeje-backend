@@ -13,9 +13,12 @@ app.use(cors());
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // ===== DATABASE =====
-mongoose.connect(process.env.MONGO_URI)
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
 .then(() => console.log("MongoDB Connected"))
-.catch(err => console.log(err));
+.catch(err => console.log("MongoDB Error:", err));
 
 // ===== MODELS =====
 const User = mongoose.model("User", {
@@ -39,17 +42,26 @@ const Order = mongoose.model("Order", {
   status: String
 });
 
+// ===== TEST ROUTE (IMPORTANT) =====
+app.get("/", (req, res) => {
+  res.send("Backend is running 🚀");
+});
+
 // ===== AUTH MIDDLEWARE =====
 function auth(req, res, next) {
   try {
     const token = req.headers["authorization"];
-    if (!token) return res.status(401).json({ error: "No token" });
 
-    const user = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = user;
+    if (!token) {
+      return res.status(401).json({ error: "No token provided" });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+
     next();
   } catch (err) {
-    res.status(401).json({ error: "Unauthorized" });
+    return res.status(401).json({ error: "Invalid token" });
   }
 }
 
@@ -73,6 +85,7 @@ app.post("/register", async (req, res) => {
     res.json({ message: "Registered successfully" });
 
   } catch (err) {
+    console.log(err);
     res.status(500).json({ error: "Registration failed" });
   }
 });
@@ -83,18 +96,21 @@ app.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
     const user = await User.findOne({ email, password });
+
     if (!user) {
-      return res.json({ error: "Invalid login" });
+      return res.json({ error: "Invalid email or password" });
     }
 
     const token = jwt.sign(
       { id: user._id },
-      process.env.JWT_SECRET
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
     );
 
     res.json({ token });
 
   } catch (err) {
+    console.log(err);
     res.status(500).json({ error: "Login failed" });
   }
 });
@@ -104,30 +120,43 @@ app.post("/auth/google", async (req, res) => {
   try {
     const { token } = req.body;
 
+    if (!token) {
+      return res.status(400).json({ error: "No token provided" });
+    }
+
     const ticket = await googleClient.verifyIdToken({
       idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID
     });
 
     const payload = ticket.getPayload();
+
+    if (!payload || !payload.email) {
+      return res.status(400).json({ error: "Invalid Google account" });
+    }
+
     const email = payload.email;
 
     let user = await User.findOne({ email });
 
     if (!user) {
-      user = new User({ email, password: "" });
+      user = new User({
+        email,
+        password: ""
+      });
       await user.save();
     }
 
     const jwtToken = jwt.sign(
       { id: user._id },
-      process.env.JWT_SECRET
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
     );
 
     res.json({ token: jwtToken });
 
   } catch (err) {
-    console.error(err);
+    console.log("Google Auth Error:", err);
     res.status(400).json({ error: "Google authentication failed" });
   }
 });
