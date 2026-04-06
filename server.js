@@ -1,21 +1,25 @@
-const log = require("./utils/logger");log("Server started");
+// ================= IMPORTS =================
+require("dotenv").config();
+
 const express = require("express");
-const mongoose = require("mongoose");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
-require("dotenv").config();
+const mongoose = require("mongoose");
 
+const connectDB = require("./config/db");
+const log = require("./utils/logger");
+
+// ================= INIT =================
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-/* ================= DATABASE ================= */
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB Connected"))
-  .catch(err => console.log(err));
+// ================= CONNECT DB =================
+connectDB();
+log("Server started");
 
-/* ================= MODELS ================= */
+// ================= MODELS =================
 const User = mongoose.model("User", {
   email: { type: String, unique: true },
   password: String,
@@ -39,7 +43,7 @@ const Order = mongoose.model("Order", {
   status: { type: String, default: "processing" }
 });
 
-/* ================= AUTH MIDDLEWARE ================= */
+// ================= AUTH MIDDLEWARE =================
 function auth(req, res, next) {
   try {
     const header = req.headers["authorization"];
@@ -55,13 +59,13 @@ function auth(req, res, next) {
   }
 }
 
-/* ================= TEST ================= */
+// ================= ROOT =================
 app.get("/", (req, res) => {
   res.send("Backend running 🚀");
 });
 
-/* ================= REGISTER ================= */
-app.post("/register", async (req, res) => {
+// ================= AUTH =================
+app.post("/api/register", async (req, res) => {
   const { email, password, phone } = req.body;
 
   if (!email || !password) {
@@ -71,14 +75,12 @@ app.post("/register", async (req, res) => {
   const exists = await User.findOne({ email });
   if (exists) return res.json({ error: "User exists" });
 
-  const user = new User({ email, password, phone });
-  await user.save();
+  await User.create({ email, password, phone });
 
   res.json({ message: "Registered successfully" });
 });
 
-/* ================= LOGIN ================= */
-app.post("/login", async (req, res) => {
+app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
 
   const user = await User.findOne({ email, password });
@@ -93,13 +95,13 @@ app.post("/login", async (req, res) => {
   res.json({ token });
 });
 
-/* ================= BALANCE ================= */
-app.get("/balance", auth, async (req, res) => {
+// ================= USER =================
+app.get("/api/balance", auth, async (req, res) => {
   const user = await User.findById(req.user.id);
   res.json({ balance: user.balance });
 });
 
-/* ================= M-PESA TOKEN ================= */
+// ================= MPESA TOKEN =================
 async function getMpesaToken() {
   const auth = Buffer.from(
     process.env.MPESA_CONSUMER_KEY + ":" + process.env.MPESA_CONSUMER_SECRET
@@ -115,8 +117,8 @@ async function getMpesaToken() {
   return res.data.access_token;
 }
 
-/* ================= STK PUSH ================= */
-app.post("/stk", auth, async (req, res) => {
+// ================= STK PUSH =================
+app.post("/api/mpesa/stk", auth, async (req, res) => {
   try {
     const { phone, amount } = req.body;
 
@@ -153,7 +155,6 @@ app.post("/stk", auth, async (req, res) => {
       }
     );
 
-    // Save pending deposit
     await Deposit.create({
       userId: req.user.id,
       phone,
@@ -163,13 +164,13 @@ app.post("/stk", auth, async (req, res) => {
     res.json({ message: "STK sent to phone" });
 
   } catch (err) {
-    console.log(err);
+    console.error(err);
     res.json({ error: "STK failed" });
   }
 });
 
-/* ================= CALLBACK ================= */
-app.post("/callback", async (req, res) => {
+// ================= CALLBACK =================
+app.post("/api/mpesa/callback", async (req, res) => {
   try {
     const result = req.body.Body.stkCallback;
 
@@ -195,13 +196,13 @@ app.post("/callback", async (req, res) => {
     res.sendStatus(200);
 
   } catch (err) {
-    console.log(err);
+    console.error(err);
     res.sendStatus(500);
   }
 });
 
-/* ================= ADMIN APPROVE ================= */
-app.post("/admin/approve", auth, async (req, res) => {
+// ================= ADMIN =================
+app.post("/api/admin/approve", auth, async (req, res) => {
   if (req.user.role !== "admin") {
     return res.json({ error: "Unauthorized" });
   }
@@ -210,8 +211,8 @@ app.post("/admin/approve", auth, async (req, res) => {
   if (!d) return res.json({ error: "Not found" });
 
   const user = await User.findById(d.userId);
-  user.balance += d.amount;
 
+  user.balance += d.amount;
   await user.save();
 
   d.status = "approved";
@@ -220,8 +221,8 @@ app.post("/admin/approve", auth, async (req, res) => {
   res.json({ message: "Approved" });
 });
 
-/* ================= ORDER ================= */
-app.post("/order", auth, async (req, res) => {
+// ================= ORDERS =================
+app.post("/api/order", auth, async (req, res) => {
   try {
     const { service, link, quantity } = req.body;
 
@@ -246,16 +247,20 @@ app.post("/order", auth, async (req, res) => {
     });
 
   } catch (err) {
+    console.error(err);
     res.json({ error: "Order failed" });
   }
 });
 
-/* ================= GET ORDERS ================= */
-app.get("/orders", auth, async (req, res) => {
+app.get("/api/orders", auth, async (req, res) => {
   const orders = await Order.find({ userId: req.user.id });
   res.json(orders);
 });
 
-/* ================= START ================= */
+// ================= START SERVER =================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  log(`Server running on port ${PORT}`);
+});
