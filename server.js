@@ -3,35 +3,31 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
-const { OAuth2Client } = require("google-auth-library");
+require("dotenv").config();
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// ===== GOOGLE CLIENT =====
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+/* ================= DATABASE ================= */
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("MongoDB Connected"))
+  .catch(err => console.log(err));
 
-// ===== DATABASE =====
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => console.log("MongoDB Connected"))
-.catch(err => console.log("MongoDB Error:", err));
-
-// ===== MODELS =====
+/* ================= MODELS ================= */
 const User = mongoose.model("User", {
   email: { type: String, unique: true },
   password: String,
-  balance: { type: Number, default: 0 }
+  phone: String,
+  balance: { type: Number, default: 0 },
+  role: { type: String, default: "user" }
 });
 
 const Deposit = mongoose.model("Deposit", {
   userId: String,
+  phone: String,
   amount: Number,
-  code: String,
-  status: { type: String, default: "Pending" }
+  status: { type: String, default: "pending" }
 });
 
 const Order = mongoose.model("Order", {
@@ -39,187 +35,194 @@ const Order = mongoose.model("Order", {
   service: String,
   link: String,
   quantity: Number,
-  status: String
+  status: { type: String, default: "processing" }
 });
 
-// ===== TEST ROUTE (IMPORTANT) =====
-app.get("/", (req, res) => {
-  res.send("Backend is running 🚀");
-});
-
-// ===== AUTH MIDDLEWARE =====
+/* ================= AUTH MIDDLEWARE ================= */
 function auth(req, res, next) {
   try {
-    const token = req.headers["authorization"];
+    const header = req.headers["authorization"];
+    if (!header) return res.status(401).json({ error: "No token" });
 
-    if (!token) {
-      return res.status(401).json({ error: "No token provided" });
-    }
-
+    const token = header.split(" ")[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
 
+    req.user = decoded;
     next();
-  } catch (err) {
-    return res.status(401).json({ error: "Invalid token" });
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
   }
 }
 
-// ===== REGISTER =====
+/* ================= TEST ================= */
+app.get("/", (req, res) => {
+  res.send("Backend running 🚀");
+});
+
+/* ================= REGISTER ================= */
 app.post("/register", async (req, res) => {
-  try {
-    const { email, password } = req.body;
+  const { email, password, phone } = req.body;
 
-    if (!email || !password) {
-      return res.json({ error: "All fields required" });
-    }
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.json({ error: "User already exists" });
-    }
-
-    const user = new User({ email, password });
-    await user.save();
-
-    res.json({ message: "Registered successfully" });
-
-  } catch (err) {
-    console.log(err);
-    res.status(500).json({ error: "Registration failed" });
+  if (!email || !password) {
+    return res.json({ error: "All fields required" });
   }
+
+  const exists = await User.findOne({ email });
+  if (exists) return res.json({ error: "User exists" });
+
+  const user = new User({ email, password, phone });
+  await user.save();
+
+  res.json({ message: "Registered successfully" });
 });
 
-// ===== LOGIN =====
+/* ================= LOGIN ================= */
 app.post("/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
+  const { email, password } = req.body;
 
-    const user = await User.findOne({ email, password });
+  const user = await User.findOne({ email, password });
+  if (!user) return res.json({ error: "Invalid login" });
 
-    if (!user) {
-      return res.json({ error: "Invalid email or password" });
-    }
+  const token = jwt.sign(
+    { id: user._id, role: user.role },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
 
-    const token = jwt.sign(
-      { id: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    res.json({ token });
-
-  } catch (err) {
-    console.log(err);
-    res.status(500).json({ error: "Login failed" });
-  }
+  res.json({ token });
 });
 
-// ===== GOOGLE LOGIN =====
-app.post("/auth/google", async (req, res) => {
-  try {
-    const { token } = req.body;
-
-    if (!token) {
-      return res.status(400).json({ error: "No token provided" });
-    }
-
-    const ticket = await googleClient.verifyIdToken({
-      idToken: token,
-      audience: process.env.GOOGLE_CLIENT_ID
-    });
-
-    const payload = ticket.getPayload();
-
-    if (!payload || !payload.email) {
-      return res.status(400).json({ error: "Invalid Google account" });
-    }
-
-    const email = payload.email;
-
-    let user = await User.findOne({ email });
-
-    if (!user) {
-      user = new User({
-        email,
-        password: ""
-      });
-      await user.save();
-    }
-
-    const jwtToken = jwt.sign(
-      { id: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    res.json({ token: jwtToken });
-
-  } catch (err) {
-    console.log("Google Auth Error:", err);
-    res.status(400).json({ error: "Google authentication failed" });
-  }
-});
-
-// ===== BALANCE =====
+/* ================= BALANCE ================= */
 app.get("/balance", auth, async (req, res) => {
   const user = await User.findById(req.user.id);
   res.json({ balance: user.balance });
 });
 
-// ===== DEPOSIT =====
-app.post("/deposit", auth, async (req, res) => {
-  try {
-    const { amount, code } = req.body;
+/* ================= M-PESA TOKEN ================= */
+async function getMpesaToken() {
+  const auth = Buffer.from(
+    process.env.MPESA_CONSUMER_KEY + ":" + process.env.MPESA_CONSUMER_SECRET
+  ).toString("base64");
 
-    if (!amount || !code) {
-      return res.json({ error: "All fields required" });
+  const res = await axios.get(
+    "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
+    {
+      headers: { Authorization: `Basic ${auth}` }
+    }
+  );
+
+  return res.data.access_token;
+}
+
+/* ================= STK PUSH ================= */
+app.post("/stk", auth, async (req, res) => {
+  try {
+    const { phone, amount } = req.body;
+
+    const token = await getMpesaToken();
+
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[-:.TZ]/g, "")
+      .slice(0, 14);
+
+    const password = Buffer.from(
+      process.env.MPESA_SHORTCODE +
+      process.env.MPESA_PASSKEY +
+      timestamp
+    ).toString("base64");
+
+    await axios.post(
+      "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
+      {
+        BusinessShortCode: process.env.MPESA_SHORTCODE,
+        Password: password,
+        Timestamp: timestamp,
+        TransactionType: "CustomerPayBillOnline",
+        Amount: amount,
+        PartyA: phone,
+        PartyB: process.env.MPESA_SHORTCODE,
+        PhoneNumber: phone,
+        CallBackURL: process.env.CALLBACK_URL,
+        AccountReference: "UNASEMEJE",
+        TransactionDesc: "Deposit"
+      },
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      }
+    );
+
+    // Save pending deposit
+    await Deposit.create({
+      userId: req.user.id,
+      phone,
+      amount
+    });
+
+    res.json({ message: "STK sent to phone" });
+
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "STK failed" });
+  }
+});
+
+/* ================= CALLBACK ================= */
+app.post("/callback", async (req, res) => {
+  try {
+    const result = req.body.Body.stkCallback;
+
+    if (result.ResultCode === 0) {
+      const items = result.CallbackMetadata.Item;
+
+      const amount = items.find(i => i.Name === "Amount").Value;
+      const phone = items.find(i => i.Name === "PhoneNumber").Value;
+
+      const user = await User.findOne({ phone });
+
+      if (user) {
+        user.balance += amount;
+        await user.save();
+
+        await Deposit.findOneAndUpdate(
+          { phone, amount, status: "pending" },
+          { status: "completed" }
+        );
+      }
     }
 
-    const deposit = new Deposit({
-      userId: req.user.id,
-      amount,
-      code
-    });
-
-    await deposit.save();
-
-    res.json({ message: "Deposit submitted" });
+    res.sendStatus(200);
 
   } catch (err) {
-    res.status(500).json({ error: "Deposit failed" });
+    console.log(err);
+    res.sendStatus(500);
   }
 });
 
-// ===== ADMIN APPROVE =====
-app.post("/admin/approve", async (req, res) => {
-  try {
-    const d = await Deposit.findById(req.body.id);
-
-    if (!d) return res.json({ error: "Deposit not found" });
-
-    await User.findByIdAndUpdate(d.userId, {
-      $inc: { balance: d.amount }
-    });
-
-    d.status = "Approved";
-    await d.save();
-
-    res.json({ message: "Approved" });
-
-  } catch (err) {
-    res.status(500).json({ error: "Approval failed" });
+/* ================= ADMIN APPROVE ================= */
+app.post("/admin/approve", auth, async (req, res) => {
+  if (req.user.role !== "admin") {
+    return res.json({ error: "Unauthorized" });
   }
+
+  const d = await Deposit.findById(req.body.id);
+  if (!d) return res.json({ error: "Not found" });
+
+  const user = await User.findById(d.userId);
+  user.balance += d.amount;
+
+  await user.save();
+
+  d.status = "approved";
+  await d.save();
+
+  res.json({ message: "Approved" });
 });
 
-// ===== ORDER =====
+/* ================= ORDER ================= */
 app.post("/order", auth, async (req, res) => {
   try {
     const { service, link, quantity } = req.body;
-
-    if (!service || !link || !quantity) {
-      return res.json({ error: "All fields required" });
-    }
 
     const response = await axios.post(process.env.SMM_API_URL, {
       key: process.env.SMM_API_KEY,
@@ -229,33 +232,29 @@ app.post("/order", auth, async (req, res) => {
       quantity
     });
 
-    const order = new Order({
+    await Order.create({
       userId: req.user.id,
       service,
       link,
-      quantity,
-      status: "Processing"
+      quantity
     });
 
-    await order.save();
-
     res.json({
-      message: "Order placed successfully",
-      providerOrderId: response.data.order
+      message: "Order placed",
+      orderId: response.data.order
     });
 
   } catch (err) {
-    console.log(err);
     res.json({ error: "Order failed" });
   }
 });
 
-// ===== GET ORDERS =====
+/* ================= GET ORDERS ================= */
 app.get("/orders", auth, async (req, res) => {
   const orders = await Order.find({ userId: req.user.id });
   res.json(orders);
 });
 
-// ===== START SERVER =====
+/* ================= START ================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
