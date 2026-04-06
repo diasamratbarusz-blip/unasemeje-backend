@@ -1,3 +1,4 @@
+const log = require("./utils/logger");log("Server started");
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
