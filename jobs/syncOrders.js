@@ -1,29 +1,32 @@
 const cron = require("node-cron");
 const smmRequest = require("../utils/smmApi");
-const Order = require("../models/Order");
+const Service = require("../models/Service");
 
-cron.schedule("*/5 * * * *", async () => {
-  console.log("Running auto order sync...");
+cron.schedule("0 * * * *", async () => {
+  console.log("🔄 Syncing services...");
 
   try {
-    const orders = await Order.find({ status: "processing" });
+    const services = await smmRequest({ action: "services" });
 
-    for (let order of orders) {
-      if (!order.smmOrderId) continue;
+    if (!Array.isArray(services)) return;
 
-      const data = await smmRequest({
-        action: "status",
-        order: order.smmOrderId
-      });
-
-      if (data.status) {
-        order.status = data.status;
-        await order.save();
-      }
+    for (let s of services) {
+      await Service.findOneAndUpdate(
+        { serviceId: String(s.service) },
+        {
+          serviceId: String(s.service),
+          name: s.name,
+          category: s.category,
+          rate: parseFloat(s.rate),
+          min: s.min,
+          max: s.max
+        },
+        { upsert: true }
+      );
     }
 
-    console.log("Order sync completed");
+    console.log("✅ Services synced");
   } catch (err) {
-    console.error("Sync error:", err.message);
+    console.error("❌ Sync failed:", err.message);
   }
 });
