@@ -1,56 +1,56 @@
 const express = require("express");
-const auth = require("../middleware/auth");
-const axios = require("axios");
-const Order = require("../models/Order");
-const User = require("../models/User");
-
 const router = express.Router();
+const auth = require("../middleware/auth");
+const smmRequest = require("../utils/smmApi");
+const Order = require("../models/Order");
 
-// CREATE ORDER
-router.post("/", auth, async (req, res) => {
+/* PLACE ORDER */
+router.post("/order", auth, async (req, res) => {
   try {
     const { service, link, quantity } = req.body;
 
+    // ✅ Basic validation
     if (!service || !link || !quantity) {
-      return res.status(400).json({ error: "Missing fields" });
+      return res.status(400).json({ error: "All fields are required" });
     }
 
-    // Call external SMM API
-    const response = await axios.post(process.env.SMM_API_URL, {
-      key: process.env.SMM_API_KEY,
+    if (quantity <= 0) {
+      return res.status(400).json({ error: "Invalid quantity" });
+    }
+
+    // ✅ Call SMM API
+    const response = await smmRequest({
       action: "add",
       service,
       link,
       quantity
     });
 
-    if (!response.data || !response.data.order) {
-      return res.status(400).json({ error: "SMM API error" });
+    if (!response || !response.order) {
+      return res.status(500).json({
+        error: "Failed to create order with SMM provider"
+      });
     }
 
-    // Save order in DB
-    const order = await Order.create({
+    // ✅ Save order in database
+    const order = new Order({
       userId: req.user.id,
       service,
       link,
       quantity,
-      status: "processing",
-      externalOrderId: response.data.order
+      smmOrderId: response.order,
+      status: "processing"
     });
 
-    res.json(order);
+    await order.save();
+
+    res.json({
+      message: "Order placed successfully",
+      order
+    });
 
   } catch (err) {
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// GET USER ORDERS
-router.get("/", auth, async (req, res) => {
-  try {
-    const orders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    res.json(orders);
-  } catch (err) {
+    console.error("Order error:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
