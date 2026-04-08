@@ -2,15 +2,23 @@ const express = require("express");
 const router = express.Router();
 const auth = require("../middleware/auth");
 const smmRequest = require("../utils/smmApi");
+
 const Order = require("../models/Order");
+const User = require("../models/User");
+const Service = require("../models/Service");
+
+/* Helper: calculate cost */
+function calculateCost(rate, quantity) {
+  return (rate / 1000) * quantity;
+}
 
 /* PLACE ORDER */
 router.post("/order", auth, async (req, res) => {
   try {
-    const { service, link, quantity } = req.body;
+    const { serviceId, link, quantity } = req.body;
 
-    // ✅ Basic validation
-    if (!service || !link || !quantity) {
+    // ✅ Validation
+    if (!serviceId || !link || !quantity) {
       return res.status(400).json({ error: "All fields are required" });
     }
 
@@ -18,10 +26,30 @@ router.post("/order", auth, async (req, res) => {
       return res.status(400).json({ error: "Invalid quantity" });
     }
 
-    // ✅ Call SMM API
+    // ✅ Find service from DB (pricing control)
+    const service = await Service.findOne({ serviceId });
+    if (!service) {
+      return res.status(404).json({ error: "Service not found" });
+    }
+
+    // ✅ Calculate cost
+    const cost = calculateCost(service.rate, quantity);
+
+    // ✅ Get user
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // ✅ Check balance
+    if (user.balance < cost) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+
+    // ✅ Send order to SMM provider
     const response = await smmRequest({
       action: "add",
-      service,
+      service: serviceId,
       link,
       quantity
     });
@@ -32,10 +60,14 @@ router.post("/order", auth, async (req, res) => {
       });
     }
 
-    // ✅ Save order in database
+    // ✅ Deduct balance
+    user.balance -= cost;
+    await user.save();
+
+    // ✅ Save order in DB
     const order = new Order({
-      userId: req.user.id,
-      service,
+      userId: user._id,
+      service: service.name,
       link,
       quantity,
       smmOrderId: response.order,
@@ -46,7 +78,9 @@ router.post("/order", auth, async (req, res) => {
 
     res.json({
       message: "Order placed successfully",
-      order
+      order,
+      cost,
+      remainingBalance: user.balance
     });
 
   } catch (err) {
