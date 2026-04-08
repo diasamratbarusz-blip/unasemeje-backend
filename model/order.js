@@ -26,7 +26,13 @@ const OrderSchema = new mongoose.Schema(
 
     smmOrderId: {
       type: String,
-      required: true
+      required: true,
+      unique: true
+    },
+
+    cost: {
+      type: Number,
+      default: 0
     },
 
     status: {
