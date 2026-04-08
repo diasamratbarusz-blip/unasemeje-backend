@@ -1,31 +1,41 @@
-const smmRequest = require("../utils/smmApi");
-const Order = require("../models/Order");
+const mongoose = require("mongoose");
 
-router.post("/order", auth, async (req, res) => {
-  try {
-    const { service, link, quantity } = req.body;
+const OrderSchema = new mongoose.Schema(
+  {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
 
-    const response = await smmRequest({
-      action: "add",
-      service,
-      link,
-      quantity
-    });
+    service: {
+      type: String,
+      required: true
+    },
 
-    const order = new Order({
-      userId: req.user.id,
-      service,
-      link,
-      quantity,
-      smmOrderId: response.order, // save API order ID
-      status: "processing"
-    });
+    link: {
+      type: String,
+      required: true
+    },
 
-    await order.save();
+    quantity: {
+      type: Number,
+      required: true,
+      min: 1
+    },
 
-    res.json(order);
+    smmOrderId: {
+      type: String,
+      required: true
+    },
 
-  } catch (err) {
-    res.status(500).json({ error: "Order failed" });
-  }
-});
+    status: {
+      type: String,
+      enum: ["pending", "processing", "completed", "partial", "canceled"],
+      default: "processing"
+    }
+  },
+  { timestamps: true }
+);
+
+module.exports = mongoose.model("Order", OrderSchema);
