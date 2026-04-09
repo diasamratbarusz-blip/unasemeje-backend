@@ -1,21 +1,28 @@
-const fetch = require("node-fetch");
+const axios = require("axios");
 
-const API_URL = "https://smm.africa/api/v3";
-const API_KEY = process.env.SMM_API_KEY; // store in env
+const API_URL = process.env.SMM_API_URL;
+const API_KEY = process.env.SMM_API_KEY;
 
-async function smmRequest(data) {
-  const res = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      key: API_KEY,
-      ...data
-    })
+async function apiRequest(data) {
+  const res = await axios.post(API_URL, {
+    key: API_KEY,
+    ...data
   });
-
-  return await res.json();
+  return res.data;
 }
 
-module.exports = smmRequest;
+exports.getServices = () => apiRequest({ action: "services" });
+
+exports.placeOrder = (service, link, quantity) =>
+  apiRequest({
+    action: "add",
+    service,
+    link,
+    quantity
+  });
+
+exports.getStatus = (order) =>
+  apiRequest({
+    action: "status",
+    order
+  });
