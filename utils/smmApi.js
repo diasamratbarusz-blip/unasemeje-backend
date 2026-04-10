@@ -3,91 +3,86 @@ const axios = require("axios");
 const API_URL = process.env.API_URL;
 const API_KEY = process.env.API_KEY;
 
-// SERVICE LIST
+// 🔒 Validate ENV
+if (!API_URL || !API_KEY) {
+  console.error("❌ Missing API_URL or API_KEY in environment variables");
+}
+
+// 🔁 Helper function (central request handler)
+async function request(params) {
+  try {
+    const res = await axios.get(API_URL, {
+      params: {
+        key: API_KEY,
+        ...params
+      },
+      timeout: 10000
+    });
+
+    return res.data;
+
+  } catch (err) {
+    console.error("❌ SMM API ERROR:", err?.response?.data || err.message);
+    return null;
+  }
+}
+
+// ================= SERVICES =================
 async function getServices() {
-  const res = await axios.get(
-    `${API_URL}?action=services&key=${API_KEY}`
-  );
-  return res.data;
+  return await request({ action: "services" });
 }
 
-// CREATE ORDER
+// ================= CREATE ORDER =================
 async function createOrder(service, link, quantity) {
-  const res = await axios.get(API_URL, {
-    params: {
-      action: "add",
-      service,
-      link,
-      quantity,
-      key: API_KEY
-    }
-  });
+  if (!service || !link || !quantity) {
+    throw new Error("Missing order parameters");
+  }
 
-  return res.data;
+  return await request({
+    action: "add",
+    service,
+    link,
+    quantity
+  });
 }
 
-// ORDER STATUS (single)
+// ================= SINGLE STATUS =================
 async function getStatus(order) {
-  const res = await axios.get(API_URL, {
-    params: {
-      action: "status",
-      order,
-      key: API_KEY
-    }
+  return await request({
+    action: "status",
+    order
   });
-
-  return res.data;
 }
 
-// MULTIPLE STATUS
+// ================= MULTIPLE STATUS =================
 async function getMultipleStatus(orders) {
-  const res = await axios.get(API_URL, {
-    params: {
-      action: "status",
-      orders: orders.join(","),
-      key: API_KEY
-    }
+  return await request({
+    action: "status",
+    orders: Array.isArray(orders) ? orders.join(",") : orders
   });
-
-  return res.data;
 }
 
-// BALANCE
+// ================= BALANCE =================
 async function getBalance() {
-  const res = await axios.get(API_URL, {
-    params: {
-      action: "balance",
-      key: API_KEY
-    }
+  return await request({
+    action: "balance"
   });
-
-  return res.data;
 }
 
-// REFILL
+// ================= REFILL =================
 async function refill(order) {
-  const res = await axios.get(API_URL, {
-    params: {
-      action: "refill",
-      order,
-      key: API_KEY
-    }
+  return await request({
+    action: "refill",
+    order
   });
-
-  return res.data;
 }
 
-// CANCEL ORDER
+// ================= CANCEL =================
 async function cancel(order) {
-  const res = await axios.get(API_URL, {
-    params: {
-      action: "cancel",
-      order,
-      key: API_KEY
-    }
+  return await request({
+    action: "cancel",
+    order
   });
-
-  return res.data;
 }
 
 module.exports = {
