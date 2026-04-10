@@ -1,14 +1,20 @@
 const axios = require("axios");
 
-const API_URL = process.env.API_URL;
-const API_KEY = process.env.API_KEY;
+// ================= CONFIG =================
+// Use environment variables (RENDER SAFE)
+const API_URL = process.env.SMM_API_URL || "https://delixgainske.com/api/v2";
+const API_KEY = process.env.SMM_API_KEY;
 
-// 🔒 Validate ENV
-if (!API_URL || !API_KEY) {
-  console.error("❌ Missing API_URL or API_KEY in environment variables");
+// ================= VALIDATE ENV =================
+if (!API_KEY) {
+  console.error("❌ Missing SMM_API_KEY in environment variables");
 }
 
-// 🔁 Helper function (central request handler)
+if (!API_URL) {
+  console.error("❌ Missing SMM_API_URL in environment variables");
+}
+
+// ================= CORE REQUEST HANDLER =================
 async function request(params) {
   try {
     const res = await axios.get(API_URL, {
@@ -16,13 +22,16 @@ async function request(params) {
         key: API_KEY,
         ...params
       },
-      timeout: 10000
+      timeout: 15000
     });
 
     return res.data;
 
   } catch (err) {
-    console.error("❌ SMM API ERROR:", err?.response?.data || err.message);
+    console.error(
+      "❌ SMM API ERROR:",
+      err?.response?.data || err.message
+    );
     return null;
   }
 }
@@ -46,7 +55,7 @@ async function createOrder(service, link, quantity) {
   });
 }
 
-// ================= SINGLE STATUS =================
+// ================= ORDER STATUS =================
 async function getStatus(order) {
   return await request({
     action: "status",
