@@ -5,122 +5,210 @@ const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
+const bcrypt = require("bcrypt");
 
 const connectDB = require("./config/db");
 const log = require("./utils/logger");
+const smmRequest = require("./utils/smmApi");
 
 // MODELS
 const User = require("./models/User");
 const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
-const Service = require("./models/Service");
-
-// UTILS
-const smmRequest = require("./utils/smmApi");
 
 // ================= VALIDATE ENV =================
 if (!process.env.JWT_SECRET) {
-  console.error("❌ JWT_SECRET missing in environment variables");
+  console.error("❌ JWT_SECRET missing");
   process.exit(1);
 }
 
 // ================= INIT =================
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
 // ================= CONNECT DB =================
 connectDB();
-log("Server starting...");
+log("🚀 Server starting...");
 
 // ================= AUTH MIDDLEWARE =================
 function auth(req, res, next) {
   try {
     const header = req.headers.authorization;
-
-    if (!header) {
-      return res.status(401).json({ error: "No token provided" });
-    }
+    if (!header) return res.status(401).json({ error: "No token" });
 
     const token = header.split(" ")[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     req.user = decoded;
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ error: "Invalid token" });
   }
 }
 
 // ================= ROOT =================
 app.get("/", (req, res) => {
-  res.send("🚀 Backend running successfully");
+  res.send("🚀 SMM Backend Running");
 });
 
 // ================= AUTH =================
+
+// REGISTER
 app.post("/api/register", async (req, res) => {
   try {
     const { email, password, phone } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password required" });
-    }
+    if (!email || !password)
+      return res.status(400).json({ error: "Missing fields" });
 
     const exists = await User.findOne({ email });
-    if (exists) return res.status(400).json({ error: "User already exists" });
+    if (exists) return res.status(400).json({ error: "User exists" });
 
-    await User.create({ email, password, phone });
+    const hashed = await bcrypt.hash(password, 10);
+
+    await User.create({
+      email,
+      password: hashed,
+      phone,
+      balance: 0,
+      role: "user"
+    });
 
     res.json({ message: "Registered successfully" });
 
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Server error" });
   }
 });
 
+// LOGIN
 app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email, password });
+    const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(400).json({ error: "Invalid credentials" });
+
     const token = jwt.sign(
-      { id: user._id, role: user.role, email: user.email },
+      { id: user._id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
     res.json({ token });
 
-  } catch (err) {
-    console.error(err);
+  } catch {
     res.status(500).json({ error: "Server error" });
   }
 });
 
 // ================= USER =================
 app.get("/api/me", auth, async (req, res) => {
+  const user = await User.findById(req.user.id);
+  res.json(user);
+});
+
+// ================= SERVICES =================
+app.get("/api/services", async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    res.json(user);
+    const services = await smmRequest.getServices();
+
+    if (!services) {
+      return res.status(500).json({ error: "Failed to fetch services" });
+    }
+
+    const formatted = services.map(s => ({
+      serviceId: s.service,
+      name: s.name,
+      category: s.category,
+      rate: Number(s.rate),
+      min: s.min,
+      max: s.max
+    }));
+
+    res.json(formatted);
+
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch user" });
+    res.status(500).json({ error: "Services error" });
   }
 });
 
-// ================= MPESA TOKEN =================
-async function getMpesaToken() {
-  const key = process.env.MPESA_CONSUMER_KEY;
-  const secret = process.env.MPESA_CONSUMER_SECRET;
+// ================= ORDER =================
+function calculateCost(rate, quantity) {
+  return (rate / 1000) * quantity;
+}
 
-  if (!key || !secret) {
-    throw new Error("Missing MPESA credentials");
+app.post("/api/order", auth, async (req, res) => {
+  try {
+    const { serviceId, link, quantity } = req.body;
+
+    if (!serviceId || !link || !quantity)
+      return res.status(400).json({ error: "Missing fields" });
+
+    const service = await smmRequest.getServices();
+    const selected = service.find(s => s.service == serviceId);
+
+    if (!selected)
+      return res.status(404).json({ error: "Service not found" });
+
+    const user = await User.findById(req.user.id);
+
+    const cost = calculateCost(selected.rate, quantity);
+
+    if (user.balance < cost)
+      return res.status(400).json({ error: "Insufficient balance" });
+
+    // CREATE ORDER VIA PROVIDER
+    const response = await smmRequest.createOrder(
+      serviceId,
+      link,
+      quantity
+    );
+
+    if (!response || !response.order) {
+      return res.status(500).json({ error: "SMM API failed" });
+    }
+
+    user.balance -= cost;
+    await user.save();
+
+    const order = await Order.create({
+      userId: user._id,
+      service: selected.name,
+      link,
+      quantity,
+      smmOrderId: response.order,
+      cost,
+      status: "Pending"
+    });
+
+    res.json({
+      message: "Order placed",
+      order,
+      balance: user.balance
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Order failed" });
   }
+});
 
-  const auth = Buffer.from(`${key}:${secret}`).toString("base64");
+// ================= ORDERS =================
+app.get("/api/orders", auth, async (req, res) => {
+  const orders = await Order.find({ userId: req.user.id });
+  res.json(orders);
+});
+
+// ================= MPESA =================
+async function getMpesaToken() {
+  const auth = Buffer.from(
+    process.env.MPESA_CONSUMER_KEY + ":" + process.env.MPESA_CONSUMER_SECRET
+  ).toString("base64");
 
   const res = await axios.get(
     "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
@@ -132,7 +220,6 @@ async function getMpesaToken() {
   return res.data.access_token;
 }
 
-// ================= MPESA STK =================
 app.post("/api/mpesa/stk", auth, async (req, res) => {
   try {
     const { phone, amount } = req.body;
@@ -177,135 +264,20 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
       status: "pending"
     });
 
-    res.json({ message: "STK push sent" });
+    res.json({ message: "STK sent" });
 
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "STK failed" });
-  }
-});
-
-// ================= CALLBACK =================
-app.post("/api/mpesa/callback", async (req, res) => {
-  try {
-    const result = req.body?.Body?.stkCallback;
-
-    if (result?.ResultCode === 0) {
-      const items = result.CallbackMetadata.Item;
-
-      const amount = items.find(i => i.Name === "Amount")?.Value;
-      const phone = items.find(i => i.Name === "PhoneNumber")?.Value;
-
-      const user = await User.findOne({ phone });
-
-      if (user) {
-        user.balance += Number(amount);
-        await user.save();
-
-        await Deposit.findOneAndUpdate(
-          { phone, amount, status: "pending" },
-          { status: "completed" }
-        );
-      }
-    }
-
-    res.sendStatus(200);
-
-  } catch (err) {
-    console.error(err);
-    res.sendStatus(500);
-  }
-});
-
-// ================= SERVICES =================
-app.get("/api/services", async (req, res) => {
-  try {
-    const services = await Service.find();
-    res.json(services);
-  } catch {
-    res.status(500).json({ error: "Failed to load services" });
-  }
-});
-
-// ================= ORDER =================
-function calculateCost(rate, quantity) {
-  return (rate / 1000) * quantity;
-}
-
-app.post("/api/order", auth, async (req, res) => {
-  try {
-    const { serviceId, link, quantity } = req.body;
-
-    if (!serviceId || !link || !quantity) {
-      return res.status(400).json({ error: "Missing fields" });
-    }
-
-    const service = await Service.findOne({ serviceId });
-    if (!service) return res.status(404).json({ error: "Service not found" });
-
-    const cost = calculateCost(service.rate, quantity);
-
-    const user = await User.findById(req.user.id);
-
-    if (user.balance < cost) {
-      return res.status(400).json({ error: "Insufficient balance" });
-    }
-
-    const response = await smmRequest({
-      action: "add",
-      service: serviceId,
-      link,
-      quantity
-    });
-
-    if (!response?.order) {
-      return res.status(500).json({ error: "SMM API failed" });
-    }
-
-    user.balance -= cost;
-    await user.save();
-
-    const order = await Order.create({
-      userId: user._id,
-      service: service.name,
-      link,
-      quantity,
-      smmOrderId: response.order,
-      cost
-    });
-
-    res.json({
-      message: "Order placed",
-      order,
-      balance: user.balance
-    });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Order failed" });
-  }
-});
-
-// ================= ORDERS =================
-app.get("/api/orders", auth, async (req, res) => {
-  try {
-    const orders = await Order.find({ userId: req.user.id });
-    res.json(orders);
-  } catch {
-    res.status(500).json({ error: "Failed to fetch orders" });
   }
 });
 
 // ================= ADMIN =================
 app.post("/api/admin/approve", auth, async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
+    if (req.user.role !== "admin")
       return res.status(403).json({ error: "Unauthorized" });
-    }
 
     const d = await Deposit.findById(req.body.id);
-    if (!d) return res.status(404).json({ error: "Not found" });
-
     const user = await User.findById(d.userId);
 
     user.balance += d.amount;
@@ -316,9 +288,8 @@ app.post("/api/admin/approve", auth, async (req, res) => {
 
     res.json({ message: "Approved" });
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Approval failed" });
+  } catch {
+    res.status(500).json({ error: "Admin error" });
   }
 });
 
@@ -326,6 +297,6 @@ app.post("/api/admin/approve", auth, async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on ${PORT}`);
+  log(`Server running on ${PORT}`);
 });
