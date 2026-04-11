@@ -1,50 +1,71 @@
 const axios = require("axios");
 
 // ================= CONFIG =================
-// Use environment variables (RENDER SAFE)
-const API_URL = process.env.SMM_API_URL || "https://delixgainske.com/api/v2";
+const API_URL =
+  process.env.SMM_API_URL || "https://delixgainske.com/api/v2";
+
 const API_KEY = process.env.SMM_API_KEY;
 
-// ================= VALIDATE ENV =================
+// ================= VALIDATION =================
 if (!API_KEY) {
-  console.error("❌ Missing SMM_API_KEY in environment variables");
+  console.error("❌ SMM_API_KEY missing in environment variables");
 }
 
 if (!API_URL) {
-  console.error("❌ Missing SMM_API_URL in environment variables");
+  console.error("❌ SMM_API_URL missing in environment variables");
 }
 
-// ================= CORE REQUEST HANDLER =================
+// ================= DEBUG MODE =================
+const DEBUG = true;
+
+// ================= CORE REQUEST =================
 async function request(params) {
+  if (!API_KEY || !API_URL) {
+    console.error("❌ API CONFIG ERROR");
+    return null;
+  }
+
   try {
     const res = await axios.get(API_URL, {
       params: {
         key: API_KEY,
         ...params
       },
-      timeout: 15000
+      timeout: 20000
     });
+
+    if (DEBUG) {
+      console.log("📡 SMM REQUEST:", params);
+      console.log("📥 SMM RESPONSE:", res.data);
+    }
 
     return res.data;
 
   } catch (err) {
-    console.error(
-      "❌ SMM API ERROR:",
-      err?.response?.data || err.message
-    );
+    console.error("❌ SMM API ERROR:");
+    console.error(err?.response?.data || err.message);
+
     return null;
   }
 }
 
 // ================= SERVICES =================
 async function getServices() {
-  return await request({ action: "services" });
+  const data = await request({ action: "services" });
+
+  if (!data || !Array.isArray(data)) {
+    console.error("❌ Invalid services response from provider");
+    return [];
+  }
+
+  return data;
 }
 
 // ================= CREATE ORDER =================
 async function createOrder(service, link, quantity) {
   if (!service || !link || !quantity) {
-    throw new Error("Missing order parameters");
+    console.error("❌ Missing order params");
+    return null;
   }
 
   return await request({
@@ -55,7 +76,7 @@ async function createOrder(service, link, quantity) {
   });
 }
 
-// ================= ORDER STATUS =================
+// ================= STATUS =================
 async function getStatus(order) {
   return await request({
     action: "status",
@@ -67,15 +88,15 @@ async function getStatus(order) {
 async function getMultipleStatus(orders) {
   return await request({
     action: "status",
-    orders: Array.isArray(orders) ? orders.join(",") : orders
+    orders: Array.isArray(orders)
+      ? orders.join(",")
+      : orders
   });
 }
 
 // ================= BALANCE =================
 async function getBalance() {
-  return await request({
-    action: "balance"
-  });
+  return await request({ action: "balance" });
 }
 
 // ================= REFILL =================
@@ -94,6 +115,7 @@ async function cancel(order) {
   });
 }
 
+// ================= EXPORTS =================
 module.exports = {
   getServices,
   createOrder,
