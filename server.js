@@ -1,4 +1,4 @@
- // ================= IMPORTS =================
+// ================= IMPORTS =================
 require("dotenv").config();
 
 const express = require("express");
@@ -224,6 +224,44 @@ app.get("/api/services", async (req, res) => {
     res.json(services);
   } catch {
     res.status(500).json({ error: "Failed to load services" });
+  }
+});
+
+// ================= ADDED: EXTERNAL SERVICES =================
+app.get("/api/services/external", async (req, res) => {
+  try {
+    const response = await axios.post(process.env.API_URL, {
+      key: process.env.API_KEY,
+      action: "services"
+    });
+
+    res.json(response.data);
+
+  } catch (error) {
+    console.error("SMM API Error:", error.response?.data || error.message);
+
+    res.status(500).json({
+      error: "Failed to load external services",
+      details: error.response?.data || error.message
+    });
+  }
+});
+
+// ================= ADDED: API TEST =================
+app.get("/api/test-smm", async (req, res) => {
+  try {
+    const response = await axios.post(process.env.API_URL, {
+      key: process.env.API_KEY,
+      action: "balance"
+    });
+
+    res.json(response.data);
+
+  } catch (error) {
+    res.status(500).json({
+      error: "API test failed",
+      details: error.response?.data || error.message
+    });
   }
 });
 
