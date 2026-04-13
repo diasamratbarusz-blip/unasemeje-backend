@@ -265,6 +265,37 @@ app.get("/api/test-smm", async (req, res) => {
   }
 });
 
+// ================= SYNC SERVICES =================
+app.get("/api/sync-services", async (req, res) => {
+  try {
+    const services = await smmRequest.getServices();
+
+    if (!Array.isArray(services)) {
+      return res.status(500).json({ error: "Invalid provider response" });
+    }
+
+    for (const s of services) {
+      await Service.updateOne(
+        { serviceId: s.service },
+        {
+          serviceId: s.service,
+          name: s.name,
+          rate: s.rate,
+          min: s.min,
+          max: s.max
+        },
+        { upsert: true }
+      );
+    }
+
+    res.json({ message: "✅ Services synced successfully" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Sync failed" });
+  }
+});
+
 // ================= ORDER =================
 function calculateCost(rate, quantity) {
   return (rate / 1000) * quantity;
