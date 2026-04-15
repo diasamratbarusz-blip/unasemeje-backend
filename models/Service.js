@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const ServiceSchema = new mongoose.Schema(
   {
-    // Provider service ID
+    // ================= PROVIDER INFO =================
     serviceId: {
       type: String,
       required: true,
@@ -10,65 +10,72 @@ const ServiceSchema = new mongoose.Schema(
       index: true
     },
 
-    // Service name (e.g. Instagram Followers)
     name: {
       type: String,
       required: true,
       trim: true
     },
 
-    // Raw category from provider
     category: {
       type: String,
       required: true,
       index: true
     },
 
-    // Base price from provider
+    // ================= PROVIDER PRICING =================
     rate: {
       type: Number,
       required: true,
       min: 0
     },
 
-    // Minimum order
+    // ================= YOUR PRICING SYSTEM =================
+    profitMargin: {
+      type: Number,
+      default: 1.5
+      // Example:
+      // 1.5 = 50% profit
+      // 2 = 100% profit
+    },
+
+    sellingRate: {
+      type: Number,
+      default: 0
+      // AUTO CALCULATED: rate * profitMargin
+    },
+
+    // ================= LIMITS =================
     min: {
       type: Number,
       default: 1
     },
 
-    // Maximum order
     max: {
       type: Number,
       default: 1000000
     },
 
-    // 🧠 PLATFORM (auto-classified later)
+    // ================= SERVICE CLASSIFICATION =================
     platform: {
       type: String,
       default: "Other",
       index: true
+      // Instagram / TikTok / YouTube etc
     },
 
-    // 💰 SELLING PRICE (your profit added)
-    sellingRate: {
-      type: Number,
-      default: 0
-    },
-
-    // 🟢 ACTIVE / DISABLED SERVICE
-    status: {
-      type: String,
-      enum: ["active", "disabled"],
-      default: "active"
-    },
-
-    // ⚡ SERVICE QUALITY FLAG (optional use)
     quality: {
       type: String,
       enum: ["low", "medium", "high"],
       default: "medium"
+    },
+
+    // ================= STATUS CONTROL =================
+    status: {
+      type: String,
+      enum: ["active", "disabled"],
+      default: "active"
     }
+
   },
   { timestamps: true }
 );
