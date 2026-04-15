@@ -1,6 +1,10 @@
 // ================= IMPORTS =================
 require("dotenv").config();
 
+// ✅ DEBUG ENV VARIABLES (ADDED)
+console.log("SMM_API_URL:", process.env.SMM_API_URL);
+console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
+
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
@@ -222,14 +226,17 @@ app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
-    // If no services in DB, fetch from provider
     if (!services || services.length === 0) {
       console.log("⚠️ Fetching services from provider...");
+      console.log("URL:", process.env.SMM_API_URL);
 
-      const response = await axios.post(process.env.SMM_API_URL, {
-        key: process.env.SMM_API_KEY,
-        action: "services"
-      });
+      const params = new URLSearchParams();
+      params.append("key", process.env.SMM_API_KEY);
+      params.append("action", "services");
+
+      const response = await axios.post(process.env.SMM_API_URL, params);
+
+      console.log("✅ Provider response:", response.data);
 
       const providerServices = response.data;
 
@@ -246,14 +253,14 @@ app.get("/api/services", async (req, res) => {
         await Service.insertMany(formatted);
         services = formatted;
       } else {
-        services = providerServices;
+        return res.status(500).json({ error: "Invalid provider response" });
       }
     }
 
     res.json(services);
 
   } catch (error) {
-    console.error("Error fetching services:", error.message);
+    console.error("❌ Error fetching services:", error.message);
     res.status(500).json({ error: "Failed to load services" });
   }
 });
