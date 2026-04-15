@@ -22,6 +22,9 @@ const Service = require("./models/Service");
 // UTILS
 const smmRequest = require("./utils/smmApi");
 
+// ================= ROUTES =================
+const servicesRoute = require("./routes/api/services");
+
 // ================= VALIDATE ENV =================
 if (!process.env.JWT_SECRET) {
   console.error("❌ JWT_SECRET missing in environment variables");
@@ -33,6 +36,9 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// ================= ROUTE MOUNT =================
+app.use("/api/services", servicesRoute);
 
 // ================= CONNECT DB =================
 connectDB();
@@ -218,50 +224,6 @@ app.post("/api/mpesa/callback", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.sendStatus(500);
-  }
-});
-
-// ================= SERVICES =================
-app.get("/api/services", async (req, res) => {
-  try {
-    let services = await Service.find();
-
-    if (!services || services.length === 0) {
-      console.log("⚠️ Fetching services from provider...");
-      console.log("URL:", process.env.SMM_API_URL);
-
-      const params = new URLSearchParams();
-      params.append("key", process.env.SMM_API_KEY);
-      params.append("action", "services");
-
-      const response = await axios.post(process.env.SMM_API_URL, params);
-
-      console.log("✅ Provider response:", response.data);
-
-      const providerServices = response.data;
-
-      if (Array.isArray(providerServices)) {
-        const formatted = providerServices.map(s => ({
-          serviceId: s.service,
-          name: s.name,
-          rate: s.rate,
-          min: s.min,
-          max: s.max,
-          category: s.category
-        }));
-
-        await Service.insertMany(formatted);
-        services = formatted;
-      } else {
-        return res.status(500).json({ error: "Invalid provider response" });
-      }
-    }
-
-    res.json(services);
-
-  } catch (error) {
-    console.error("❌ Error fetching services:", error.message);
-    res.status(500).json({ error: "Failed to load services" });
   }
 });
 
