@@ -1,144 +1,95 @@
-// ================= EXTERNAL SERVICES (SMM API) =================
-app.get("/api/services/external", async (req, res) => {
+const express = require("express");
+const router = express.Router();
+
+const Service = require("../models/Service");
+
+/**
+ * ================================
+ * GET ALL ACTIVE SERVICES (USER VIEW)
+ * ================================
+ * Users ONLY see:
+ * - serviceId
+ * - name
+ * - category
+ * - selling price (rate)
+ * - min / max
+ * - platform / quality (optional UI use)
+ */
+router.get("/", async (req, res) => {
   try {
-    if (!process.env.API_URL || !process.env.API_KEY) {
-      return res.status(500).json({ error: "API configuration missing" });
+    const services = await Service.find({ status: "active" })
+      .select("serviceId name category sellingRate min max platform quality");
+
+    if (!services || services.length === 0) {
+      return res.status(404).json({
+        error: "No services available"
+      });
     }
 
-    const response = await axios.post(
-      process.env.API_URL,
-      {
-        key: process.env.API_KEY,
-        action: "services",
-      },
-      { timeout: 15000 }
+    res.json(
+      services.map((s) => ({
+        serviceId: s.serviceId,
+        name: s.name,
+        category: s.category,
+
+        // 💰 USER PRICE (IMPORTANT)
+        rate: s.sellingRate,
+
+        min: s.min,
+        max: s.max,
+
+        platform: s.platform,
+        quality: s.quality
+      }))
     );
-
-    if (!response.data || !Array.isArray(response.data)) {
-      return res.status(500).json({
-        error: "Invalid response from provider",
-      });
-    }
-
-    res.json(response.data);
-
-  } catch (error) {
-    console.error("❌ SMM API Error:", {
-      message: error.message,
-      data: error.response?.data,
-      status: error.response?.status,
-    });
-
-    res.status(500).json({
-      error: "Failed to load external services",
-      details: error.response?.data || error.message,
-    });
-  }
-});
-
-
-// ================= INTERNAL SERVICES =================
-app.get("/api/services", async (req, res) => {
-  try {
-    const services = await smmRequest.getServices();
-
-    if (!Array.isArray(services)) {
-      return res.status(500).json({
-        error: "Invalid services format",
-      });
-    }
-
-    res.json(services);
 
   } catch (err) {
-    console.error("❌ Internal Service Error:", err.message);
+    console.error("❌ SERVICES ERROR:", err.message);
 
     res.status(500).json({
-      error: "Failed to fetch services from API",
-      details: err.message,
+      error: "Failed to fetch services",
+      details: err.message
     });
   }
 });
 
-
-// ================= SYNC SERVICES TO DB =================
-app.get("/api/sync-services", async (req, res) => {
+/**
+ * ================================
+ * GET SINGLE SERVICE (OPTIONAL)
+ * ================================
+ */
+router.get("/:serviceId", async (req, res) => {
   try {
-    if (!process.env.API_URL || !process.env.API_KEY) {
-      return res.status(500).json({ error: "API configuration missing" });
-    }
+    const service = await Service.findOne({
+      serviceId: req.params.serviceId,
+      status: "active"
+    });
 
-    const response = await axios.post(
-      process.env.API_URL,
-      {
-        key: process.env.API_KEY,
-        action: "services",
-      },
-      { timeout: 20000 }
-    );
-
-    const services = response.data;
-
-    if (!Array.isArray(services)) {
-      return res.status(500).json({
-        error: "Invalid service data from provider",
+    if (!service) {
+      return res.status(404).json({
+        error: "Service not found"
       });
     }
 
-    let added = 0;
-    let updated = 0;
-
-    // 🔥 OPTIMIZED: run in parallel instead of slow loop
-    await Promise.all(
-      services.map(async (s) => {
-        const existing = await Service.findOne({ serviceId: s.service });
-
-        if (existing) {
-          await Service.updateOne(
-            { serviceId: s.service },
-            {
-              $set: {
-                name: s.name,
-                rate: s.rate,
-                min: s.min,
-                max: s.max,
-                type: s.type,
-                category: s.category,
-              },
-            }
-          );
-          updated++;
-        } else {
-          await Service.create({
-            serviceId: s.service,
-            name: s.name,
-            rate: s.rate,
-            min: s.min,
-            max: s.max,
-            type: s.type,
-            category: s.category,
-          });
-          added++;
-        }
-      })
-    );
-
     res.json({
-      message: "✅ Sync completed",
-      added,
-      updated,
-      total: services.length,
+      serviceId: service.serviceId,
+      name: service.name,
+      category: service.category,
+      rate: service.sellingRate,
+      min: service.min,
+      max: service.max,
+      platform: service.platform,
+      quality: service.quality
     });
 
-  } catch (error) {
-    console.error("❌ SYNC ERROR:", {
-      message: error.message,
-      data: error.response?.data,
-    });
+  } catch (err) {
+    console.error("❌ SERVICE ERROR:", err.message);
 
     res.status(500).json({
-      error: "Sync failed",
-      details: error.response?.data || error.message,
+      error: "Failed to fetch service",
+      details: err.message
     });
   }
 });
+
+module.exports = router;
