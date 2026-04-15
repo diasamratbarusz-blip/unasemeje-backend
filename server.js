@@ -1,7 +1,8 @@
 // ================= IMPORTS =================
 require("dotenv").config();
 
-console.log("SMM_API_URL:", process.env.SMM_API_URL ? "Loaded ✅" : "Missing ❌");
+// ✅ DEBUG ENV VARIABLES (ADDED)
+console.log("SMM_API_URL:", process.env.SMM_API_URL);
 console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
 
 const express = require("express");
@@ -16,31 +17,26 @@ const log = require("./utils/logger");
 const User = require("./models/User");
 const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
+const Service = require("./models/Service");
 
 // UTILS
 const smmRequest = require("./utils/smmApi");
 
-// ROUTES
-const servicesRoute = require("./routes/api/services");
-
 // ================= VALIDATE ENV =================
 if (!process.env.JWT_SECRET) {
-  console.error("❌ JWT_SECRET missing");
+  console.error("❌ JWT_SECRET missing in environment variables");
   process.exit(1);
 }
 
-// ================= APP INIT =================
+// ================= INIT =================
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// ================= ROUTES =================
-app.use("/api/services", servicesRoute);
-
-// ================= DB =================
+// ================= CONNECT DB =================
 connectDB();
-log("🚀 Server starting...");
+log("Server starting...");
 
 // ================= AUTH MIDDLEWARE =================
 function auth(req, res, next) {
@@ -48,7 +44,7 @@ function auth(req, res, next) {
     const header = req.headers.authorization;
 
     if (!header) {
-      return res.status(401).json({ error: "No token" });
+      return res.status(401).json({ error: "No token provided" });
     }
 
     const token = header.split(" ")[1];
@@ -56,14 +52,14 @@ function auth(req, res, next) {
 
     req.user = decoded;
     next();
-  } catch {
+  } catch (err) {
     return res.status(401).json({ error: "Invalid token" });
   }
 }
 
 // ================= ROOT =================
 app.get("/", (req, res) => {
-  res.send("🚀 SMM Backend Running");
+  res.send("🚀 Backend running successfully");
 });
 
 // ================= AUTH =================
@@ -71,13 +67,19 @@ app.post("/api/register", async (req, res) => {
   try {
     const { email, password, phone } = req.body;
 
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password required" });
+    }
+
     const exists = await User.findOne({ email });
-    if (exists) return res.status(400).json({ error: "User exists" });
+    if (exists) return res.status(400).json({ error: "User already exists" });
 
     await User.create({ email, password, phone });
 
-    res.json({ message: "Registered" });
+    res.json({ message: "Registered successfully" });
+
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -87,24 +89,30 @@ app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
 
     const user = await User.findOne({ email, password });
-    if (!user) return res.status(400).json({ error: "Invalid login" });
+    if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
     const token = jwt.sign(
-      { id: user._id, role: user.role },
+      { id: user._id, role: user.role, email: user.email },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
     res.json({ token });
-  } catch {
+
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Server error" });
   }
 });
 
 // ================= USER =================
 app.get("/api/me", auth, async (req, res) => {
-  const user = await User.findById(req.user.id);
-  res.json(user);
+  try {
+    const user = await User.findById(req.user.id);
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch user" });
+  }
 });
 
 // ================= MPESA TOKEN =================
@@ -112,11 +120,17 @@ async function getMpesaToken() {
   const key = process.env.MPESA_CONSUMER_KEY;
   const secret = process.env.MPESA_CONSUMER_SECRET;
 
+  if (!key || !secret) {
+    throw new Error("Missing MPESA credentials");
+  }
+
   const auth = Buffer.from(`${key}:${secret}`).toString("base64");
 
   const res = await axios.get(
     "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
-    { headers: { Authorization: `Basic ${auth}` } }
+    {
+      headers: { Authorization: `Basic ${auth}` }
+    }
   );
 
   return res.data.access_token;
@@ -155,7 +169,9 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
         AccountReference: "SMM PANEL",
         TransactionDesc: "Deposit"
       },
-      { headers: { Authorization: `Bearer ${token}` } }
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      }
     );
 
     await Deposit.create({
@@ -165,7 +181,7 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
       status: "pending"
     });
 
-    res.json({ message: "STK sent" });
+    res.json({ message: "STK push sent" });
 
   } catch (err) {
     console.error(err);
@@ -198,30 +214,79 @@ app.post("/api/mpesa/callback", async (req, res) => {
     }
 
     res.sendStatus(200);
-  } catch {
+
+  } catch (err) {
+    console.error(err);
     res.sendStatus(500);
   }
 });
 
+// ================= SERVICES =================
+app.get("/api/services", async (req, res) => {
+  try {
+    let services = await Service.find();
+
+    if (!services || services.length === 0) {
+      console.log("⚠️ Fetching services from provider...");
+      console.log("URL:", process.env.SMM_API_URL);
+
+      const params = new URLSearchParams();
+      params.append("key", process.env.SMM_API_KEY);
+      params.append("action", "services");
+
+      const response = await axios.post(process.env.SMM_API_URL, params);
+
+      console.log("✅ Provider response:", response.data);
+
+      const providerServices = response.data;
+
+      if (Array.isArray(providerServices)) {
+        const formatted = providerServices.map(s => ({
+          serviceId: s.service,
+          name: s.name,
+          rate: s.rate,
+          min: s.min,
+          max: s.max,
+          category: s.category
+        }));
+
+        await Service.insertMany(formatted);
+        services = formatted;
+      } else {
+        return res.status(500).json({ error: "Invalid provider response" });
+      }
+    }
+
+    res.json(services);
+
+  } catch (error) {
+    console.error("❌ Error fetching services:", error.message);
+    res.status(500).json({ error: "Failed to load services" });
+  }
+});
+
 // ================= ORDER =================
-function calculateCost(rate, qty) {
-  return (rate / 1000) * qty;
+function calculateCost(rate, quantity) {
+  return (rate / 1000) * quantity;
 }
 
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
 
-    const user = await User.findById(req.user.id);
+    if (!serviceId || !link || !quantity) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
 
-    const service = await require("./models/Service").findOne({ serviceId });
-
+    const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
     const cost = calculateCost(service.rate, quantity);
 
+    const user = await User.findById(req.user.id);
+
     if (user.balance < cost) {
-      return res.status(400).json({ error: "Low balance" });
+      return res.status(400).json({ error: "Insufficient balance" });
     }
 
     const response = await smmRequest({
@@ -231,8 +296,8 @@ app.post("/api/order", auth, async (req, res) => {
       quantity
     });
 
-    if (!response.order) {
-      return res.status(500).json({ error: "Provider error" });
+    if (!response?.order) {
+      return res.status(500).json({ error: "SMM API failed" });
     }
 
     user.balance -= cost;
@@ -247,7 +312,11 @@ app.post("/api/order", auth, async (req, res) => {
       cost
     });
 
-    res.json({ message: "Order placed", order, balance: user.balance });
+    res.json({
+      message: "Order placed",
+      order,
+      balance: user.balance
+    });
 
   } catch (err) {
     console.error(err);
@@ -257,29 +326,41 @@ app.post("/api/order", auth, async (req, res) => {
 
 // ================= ORDERS =================
 app.get("/api/orders", auth, async (req, res) => {
-  const orders = await Order.find({ userId: req.user.id });
-  res.json(orders);
+  try {
+    const orders = await Order.find({ userId: req.user.id });
+    res.json(orders);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch orders" });
+  }
 });
 
 // ================= ADMIN =================
 app.post("/api/admin/approve", auth, async (req, res) => {
-  if (req.user.role !== "admin") {
-    return res.status(403).json({ error: "Unauthorized" });
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const d = await Deposit.findById(req.body.id);
+    if (!d) return res.status(404).json({ error: "Not found" });
+
+    const user = await User.findById(d.userId);
+
+    user.balance += d.amount;
+    await user.save();
+
+    d.status = "approved";
+    await d.save();
+
+    res.json({ message: "Approved" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Approval failed" });
   }
-
-  const d = await Deposit.findById(req.body.id);
-  const user = await User.findById(d.userId);
-
-  user.balance += d.amount;
-  await user.save();
-
-  d.status = "approved";
-  await d.save();
-
-  res.json({ message: "Approved" });
 });
 
-// ================= START =================
+// ================= START SERVER =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
