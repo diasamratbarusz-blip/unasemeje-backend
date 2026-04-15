@@ -13,7 +13,7 @@ let cache = {
 const CACHE_TIME = 5 * 60 * 1000;
 
 // ================= FETCH PROVIDER =================
-async function fetchProviderServices() {
+async function fetchServicesFromProvider() {
   const params = new URLSearchParams();
   params.append("key", process.env.SMM_API_KEY);
   params.append("action", "services");
@@ -34,20 +34,20 @@ async function fetchProviderServices() {
   }));
 }
 
-// ================= PLATFORM DETECTOR =================
+// ================= PLATFORM DETECTION =================
 function getPlatform(category = "") {
   const c = category.toLowerCase();
 
   if (c.includes("instagram")) return "Instagram";
   if (c.includes("tiktok")) return "TikTok";
-  if (c.includes("facebook")) return "Facebook";
   if (c.includes("youtube")) return "YouTube";
+  if (c.includes("facebook")) return "Facebook";
   if (c.includes("twitter") || c.includes("x")) return "Twitter/X";
 
   return "Other";
 }
 
-// ================= TYPE DETECTOR =================
+// ================= SERVICE TYPE DETECTION =================
 function getType(name = "") {
   const n = name.toLowerCase();
 
@@ -73,15 +73,16 @@ router.get("/", async (req, res) => {
     } else {
       services = await Service.find();
 
+      // If DB empty → fetch from provider
       if (!services.length) {
-        console.log("🔄 Fetching from provider...");
+        console.log("🔄 Fetching services from provider...");
 
-        const provider = await fetchProviderServices();
+        const providerServices = await fetchServicesFromProvider();
 
         await Service.deleteMany({});
-        await Service.insertMany(provider);
+        await Service.insertMany(providerServices);
 
-        services = provider;
+        services = providerServices;
       }
 
       cache = { data: services, time: now };
@@ -91,13 +92,14 @@ router.get("/", async (req, res) => {
 
     let filtered = services;
 
-    // ================= FILTER =================
+    // ================= FILTER BY PLATFORM =================
     if (platform) {
       filtered = filtered.filter(
         s => getPlatform(s.category) === platform
       );
     }
 
+    // ================= SEARCH =================
     if (search) {
       filtered = filtered.filter(s =>
         s.name.toLowerCase().includes(search.toLowerCase())
@@ -110,27 +112,30 @@ router.get("/", async (req, res) => {
     for (let s of filtered) {
       if (s.rate <= 0) continue;
 
-      const p = getPlatform(s.category);
-      const t = getType(s.name);
+      const platformName = getPlatform(s.category);
+      const type = getType(s.name);
 
-      if (!grouped[p]) grouped[p] = {};
-      if (!grouped[p][t]) grouped[p][t] = [];
+      if (!grouped[platformName]) grouped[platformName] = {};
+      if (!grouped[platformName][type]) grouped[platformName][type] = [];
 
       // ================= PROFIT SYSTEM =================
-      let profit = 20;
+      let profitPercent = 25;
 
-      if (s.rate < 1) profit = 60;
-      else if (s.rate < 3) profit = 35;
+      if (s.rate < 1) profitPercent = 60;
+      else if (s.rate < 3) profitPercent = 35;
+      else if (s.rate < 10) profitPercent = 20;
 
-      const sellingRate = s.rate + (s.rate * profit / 100);
+      const sellingRate =
+        s.rate + (s.rate * profitPercent) / 100;
 
-      grouped[p][t].push({
+      grouped[platformName][type].push({
         serviceId: s.serviceId,
         name: s.name,
         rate: Number(sellingRate.toFixed(2)),
         originalRate: s.rate,
         min: s.min,
-        max: s.max
+        max: s.max,
+        profit: profitPercent
       });
     }
 
@@ -142,6 +147,7 @@ router.get("/", async (req, res) => {
 
   } catch (err) {
     console.error("SERVICES ERROR:", err.message);
+
     res.status(500).json({
       success: false,
       error: "Failed to load services"
