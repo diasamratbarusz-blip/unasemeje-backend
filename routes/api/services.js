@@ -5,55 +5,37 @@ const Service = require("../../models/Service");
 const router = express.Router();
 
 // ================= CACHE =================
-let servicesCache = {
+let cache = {
   data: null,
-  lastFetch: 0
+  time: 0
 };
 
-const CACHE_TIME = 5 * 60 * 1000; // 5 minutes
+const CACHE_TIME = 5 * 60 * 1000;
 
-// ================= FETCH FROM PROVIDER =================
-async function fetchFromProvider() {
-  console.log("🔄 Syncing services from provider...");
-
+// ================= FETCH PROVIDER =================
+async function fetchProviderServices() {
   const params = new URLSearchParams();
   params.append("key", process.env.SMM_API_KEY);
   params.append("action", "services");
 
-  const response = await axios.post(process.env.SMM_API_URL, params);
-  const data = response.data;
+  const res = await axios.post(process.env.SMM_API_URL, params);
 
-  if (!Array.isArray(data)) {
+  if (!Array.isArray(res.data)) {
     throw new Error("Invalid provider response");
   }
 
-  const formatted = data.map(s => ({
-    serviceId: s.service,
+  return res.data.map(s => ({
+    serviceId: String(s.service),
     name: s.name,
+    category: s.category || "Other",
     rate: Number(s.rate),
     min: Number(s.min),
-    max: Number(s.max),
-    category: s.category || "Other"
+    max: Number(s.max)
   }));
-
-  await Service.deleteMany({});
-  await Service.insertMany(formatted);
-
-  return formatted;
 }
 
-// ================= AUTO SYNC (EVERY 30 MIN) =================
-setInterval(async () => {
-  try {
-    await fetchFromProvider();
-    console.log("✅ Services auto-synced");
-  } catch (err) {
-    console.error("Auto-sync failed:", err.message);
-  }
-}, 30 * 60 * 1000);
-
-// ================= HELPERS =================
-const getPlatform = (category = "") => {
+// ================= PLATFORM DETECTOR =================
+function getPlatform(category = "") {
   const c = category.toLowerCase();
 
   if (c.includes("instagram")) return "Instagram";
@@ -63,9 +45,10 @@ const getPlatform = (category = "") => {
   if (c.includes("twitter") || c.includes("x")) return "Twitter/X";
 
   return "Other";
-};
+}
 
-const getType = (name = "") => {
+// ================= TYPE DETECTOR =================
+function getType(name = "") {
   const n = name.toLowerCase();
 
   if (n.includes("follower")) return "Followers";
@@ -75,7 +58,7 @@ const getType = (name = "") => {
   if (n.includes("share")) return "Shares";
 
   return "Other";
-};
+}
 
 // ================= MAIN ROUTE =================
 router.get("/", async (req, res) => {
@@ -84,27 +67,31 @@ router.get("/", async (req, res) => {
 
     let services;
 
-    // ================= CACHE =================
-    if (servicesCache.data && (now - servicesCache.lastFetch < CACHE_TIME)) {
-      services = servicesCache.data;
+    // ================= CACHE CHECK =================
+    if (cache.data && now - cache.time < CACHE_TIME) {
+      services = cache.data;
     } else {
       services = await Service.find();
 
-      if (!services || services.length === 0) {
-        services = await fetchFromProvider();
+      if (!services.length) {
+        console.log("🔄 Fetching from provider...");
+
+        const provider = await fetchProviderServices();
+
+        await Service.deleteMany({});
+        await Service.insertMany(provider);
+
+        services = provider;
       }
 
-      servicesCache = {
-        data: services,
-        lastFetch: now
-      };
+      cache = { data: services, time: now };
     }
 
     const { platform, search } = req.query;
 
-    // ================= FILTER =================
     let filtered = services;
 
+    // ================= FILTER =================
     if (platform) {
       filtered = filtered.filter(
         s => getPlatform(s.category) === platform
@@ -120,53 +107,45 @@ router.get("/", async (req, res) => {
     // ================= GROUPING =================
     const grouped = {};
 
-    filtered.forEach(service => {
-      if (service.rate <= 0 || service.min <= 0) return;
+    for (let s of filtered) {
+      if (s.rate <= 0) continue;
 
-      const platformName = getPlatform(service.category);
-      const type = getType(service.name);
+      const p = getPlatform(s.category);
+      const t = getType(s.name);
 
-      if (!grouped[platformName]) grouped[platformName] = {};
-      if (!grouped[platformName][type]) grouped[platformName][type] = [];
+      if (!grouped[p]) grouped[p] = {};
+      if (!grouped[p][t]) grouped[p][t] = [];
 
       // ================= PROFIT SYSTEM =================
-      const baseProfit = 20;
+      let profit = 20;
 
-      let profit = baseProfit;
+      if (s.rate < 1) profit = 60;
+      else if (s.rate < 3) profit = 35;
 
-      if (service.rate < 1) profit = 50;
-      else if (service.rate < 3) profit = 30;
+      const sellingRate = s.rate + (s.rate * profit / 100);
 
-      const finalRate = service.rate + (service.rate * profit / 100);
-
-      grouped[platformName][type].push({
-        serviceId: service.serviceId,
-        name: service.name,
-        rate: Number(finalRate.toFixed(2)),
-        originalRate: service.rate,
-        min: service.min,
-        max: service.max
+      grouped[p][t].push({
+        serviceId: s.serviceId,
+        name: s.name,
+        rate: Number(sellingRate.toFixed(2)),
+        originalRate: s.rate,
+        min: s.min,
+        max: s.max
       });
-    });
-
-    // ================= SORT =================
-    for (let p in grouped) {
-      for (let t in grouped[p]) {
-        grouped[p][t].sort((a, b) => a.rate - b.rate);
-      }
     }
 
-    // ================= RESPONSE =================
-    res.json({
+    return res.json({
       success: true,
       total: filtered.length,
-      cached: !!servicesCache.data,
       data: grouped
     });
 
   } catch (err) {
-    console.error("❌ SERVICES ERROR:", err.message);
-    res.status(500).json({ error: "Failed to load services" });
+    console.error("SERVICES ERROR:", err.message);
+    res.status(500).json({
+      success: false,
+      error: "Failed to load services"
+    });
   }
 });
 
