@@ -1,8 +1,7 @@
 // ================= IMPORTS =================
 require("dotenv").config();
 
-// ✅ DEBUG ENV VARIABLES (ADDED)
-console.log("SMM_API_URL:", process.env.SMM_API_URL);
+console.log("SMM_API_URL:", process.env.SMM_API_URL ? "Loaded ✅" : "Missing ❌");
 console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
 
 const express = require("express");
@@ -17,32 +16,31 @@ const log = require("./utils/logger");
 const User = require("./models/User");
 const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
-const Service = require("./models/Service");
 
 // UTILS
 const smmRequest = require("./utils/smmApi");
 
-// ================= ROUTES =================
+// ROUTES
 const servicesRoute = require("./routes/api/services");
 
 // ================= VALIDATE ENV =================
 if (!process.env.JWT_SECRET) {
-  console.error("❌ JWT_SECRET missing in environment variables");
+  console.error("❌ JWT_SECRET missing");
   process.exit(1);
 }
 
-// ================= INIT =================
+// ================= APP INIT =================
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// ================= ROUTE MOUNT =================
+// ================= ROUTES =================
 app.use("/api/services", servicesRoute);
 
-// ================= CONNECT DB =================
+// ================= DB =================
 connectDB();
-log("Server starting...");
+log("🚀 Server starting...");
 
 // ================= AUTH MIDDLEWARE =================
 function auth(req, res, next) {
@@ -50,7 +48,7 @@ function auth(req, res, next) {
     const header = req.headers.authorization;
 
     if (!header) {
-      return res.status(401).json({ error: "No token provided" });
+      return res.status(401).json({ error: "No token" });
     }
 
     const token = header.split(" ")[1];
@@ -58,14 +56,14 @@ function auth(req, res, next) {
 
     req.user = decoded;
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ error: "Invalid token" });
   }
 }
 
 // ================= ROOT =================
 app.get("/", (req, res) => {
-  res.send("🚀 Backend running successfully");
+  res.send("🚀 SMM Backend Running");
 });
 
 // ================= AUTH =================
@@ -73,19 +71,13 @@ app.post("/api/register", async (req, res) => {
   try {
     const { email, password, phone } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password required" });
-    }
-
     const exists = await User.findOne({ email });
-    if (exists) return res.status(400).json({ error: "User already exists" });
+    if (exists) return res.status(400).json({ error: "User exists" });
 
     await User.create({ email, password, phone });
 
-    res.json({ message: "Registered successfully" });
-
+    res.json({ message: "Registered" });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -95,30 +87,24 @@ app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
 
     const user = await User.findOne({ email, password });
-    if (!user) return res.status(400).json({ error: "Invalid credentials" });
+    if (!user) return res.status(400).json({ error: "Invalid login" });
 
     const token = jwt.sign(
-      { id: user._id, role: user.role, email: user.email },
+      { id: user._id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
     res.json({ token });
-
-  } catch (err) {
-    console.error(err);
+  } catch {
     res.status(500).json({ error: "Server error" });
   }
 });
 
 // ================= USER =================
 app.get("/api/me", auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-    res.json(user);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch user" });
-  }
+  const user = await User.findById(req.user.id);
+  res.json(user);
 });
 
 // ================= MPESA TOKEN =================
@@ -126,17 +112,11 @@ async function getMpesaToken() {
   const key = process.env.MPESA_CONSUMER_KEY;
   const secret = process.env.MPESA_CONSUMER_SECRET;
 
-  if (!key || !secret) {
-    throw new Error("Missing MPESA credentials");
-  }
-
   const auth = Buffer.from(`${key}:${secret}`).toString("base64");
 
   const res = await axios.get(
     "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
-    {
-      headers: { Authorization: `Basic ${auth}` }
-    }
+    { headers: { Authorization: `Basic ${auth}` } }
   );
 
   return res.data.access_token;
@@ -175,9 +155,7 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
         AccountReference: "SMM PANEL",
         TransactionDesc: "Deposit"
       },
-      {
-        headers: { Authorization: `Bearer ${token}` }
-      }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
 
     await Deposit.create({
@@ -187,7 +165,7 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
       status: "pending"
     });
 
-    res.json({ message: "STK push sent" });
+    res.json({ message: "STK sent" });
 
   } catch (err) {
     console.error(err);
@@ -220,35 +198,30 @@ app.post("/api/mpesa/callback", async (req, res) => {
     }
 
     res.sendStatus(200);
-
-  } catch (err) {
-    console.error(err);
+  } catch {
     res.sendStatus(500);
   }
 });
 
 // ================= ORDER =================
-function calculateCost(rate, quantity) {
-  return (rate / 1000) * quantity;
+function calculateCost(rate, qty) {
+  return (rate / 1000) * qty;
 }
 
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
 
-    if (!serviceId || !link || !quantity) {
-      return res.status(400).json({ error: "Missing fields" });
-    }
+    const user = await User.findById(req.user.id);
 
-    const service = await Service.findOne({ serviceId });
+    const service = await require("./models/Service").findOne({ serviceId });
+
     if (!service) return res.status(404).json({ error: "Service not found" });
 
     const cost = calculateCost(service.rate, quantity);
 
-    const user = await User.findById(req.user.id);
-
     if (user.balance < cost) {
-      return res.status(400).json({ error: "Insufficient balance" });
+      return res.status(400).json({ error: "Low balance" });
     }
 
     const response = await smmRequest({
@@ -258,8 +231,8 @@ app.post("/api/order", auth, async (req, res) => {
       quantity
     });
 
-    if (!response?.order) {
-      return res.status(500).json({ error: "SMM API failed" });
+    if (!response.order) {
+      return res.status(500).json({ error: "Provider error" });
     }
 
     user.balance -= cost;
@@ -274,11 +247,7 @@ app.post("/api/order", auth, async (req, res) => {
       cost
     });
 
-    res.json({
-      message: "Order placed",
-      order,
-      balance: user.balance
-    });
+    res.json({ message: "Order placed", order, balance: user.balance });
 
   } catch (err) {
     console.error(err);
@@ -288,41 +257,29 @@ app.post("/api/order", auth, async (req, res) => {
 
 // ================= ORDERS =================
 app.get("/api/orders", auth, async (req, res) => {
-  try {
-    const orders = await Order.find({ userId: req.user.id });
-    res.json(orders);
-  } catch {
-    res.status(500).json({ error: "Failed to fetch orders" });
-  }
+  const orders = await Order.find({ userId: req.user.id });
+  res.json(orders);
 });
 
 // ================= ADMIN =================
 app.post("/api/admin/approve", auth, async (req, res) => {
-  try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
-
-    const d = await Deposit.findById(req.body.id);
-    if (!d) return res.status(404).json({ error: "Not found" });
-
-    const user = await User.findById(d.userId);
-
-    user.balance += d.amount;
-    await user.save();
-
-    d.status = "approved";
-    await d.save();
-
-    res.json({ message: "Approved" });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Approval failed" });
+  if (req.user.role !== "admin") {
+    return res.status(403).json({ error: "Unauthorized" });
   }
+
+  const d = await Deposit.findById(req.body.id);
+  const user = await User.findById(d.userId);
+
+  user.balance += d.amount;
+  await user.save();
+
+  d.status = "approved";
+  await d.save();
+
+  res.json({ message: "Approved" });
 });
 
-// ================= START SERVER =================
+// ================= START =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
