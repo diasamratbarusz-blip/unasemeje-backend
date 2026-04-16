@@ -67,10 +67,6 @@ app.post("/api/register", async (req, res) => {
   try {
     const { email, password, phone } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password required" });
-    }
-
     const exists = await User.findOne({ email });
     if (exists) return res.status(400).json({ error: "User already exists" });
 
@@ -79,7 +75,6 @@ app.post("/api/register", async (req, res) => {
     res.json({ message: "Registered successfully" });
 
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -100,7 +95,6 @@ app.post("/api/login", async (req, res) => {
     res.json({ token });
 
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -110,12 +104,12 @@ app.get("/api/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     res.json(user);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to fetch user" });
   }
 });
 
-// ================= MPESA TOKEN =================
+// ================= MPESA =================
 async function getMpesaToken() {
   const key = process.env.MPESA_CONSUMER_KEY;
   const secret = process.env.MPESA_CONSUMER_SECRET;
@@ -124,9 +118,7 @@ async function getMpesaToken() {
 
   const res = await axios.get(
     "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
-    {
-      headers: { Authorization: `Basic ${auth}` }
-    }
+    { headers: { Authorization: `Basic ${auth}` } }
   );
 
   return res.data.access_token;
@@ -165,9 +157,7 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
         AccountReference: "SMM PANEL",
         TransactionDesc: "Deposit"
       },
-      {
-        headers: { Authorization: `Bearer ${token}` }
-      }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
 
     await Deposit.create({
@@ -211,29 +201,36 @@ app.post("/api/mpesa/callback", async (req, res) => {
 
     res.sendStatus(200);
 
-  } catch (err) {
-    console.error(err);
+  } catch {
     res.sendStatus(500);
   }
 });
 
-// ================= SERVICES (FIXED + GROUPED + PROVIDER SYNC) =================
+// ================= SERVICES (FIXED & STABLE) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
+    // IF DB EMPTY → FETCH FROM PROVIDER
     if (!services || services.length === 0) {
       console.log("⚠️ Fetching services from provider...");
 
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
 
-      const response = await axios.get(url);
+      const response = await axios.get(url, { timeout: 15000 });
 
-      if (!Array.isArray(response.data)) {
-        return res.status(500).json({ error: "Invalid provider response" });
+      const raw = response.data;
+
+      let list = [];
+
+      // FIX: provider may return array OR object
+      if (Array.isArray(raw)) {
+        list = raw;
+      } else {
+        list = Object.values(raw);
       }
 
-      const formatted = response.data.map(s => ({
+      const formatted = list.map(s => ({
         serviceId: s.service,
         name: s.name,
         rate: Number(s.rate),
@@ -242,7 +239,17 @@ app.get("/api/services", async (req, res) => {
         category: s.category || "Other"
       }));
 
-      await Service.insertMany(formatted);
+      // UPSERT (NO DUPLICATES)
+      await Service.bulkWrite(
+        formatted.map(s => ({
+          updateOne: {
+            filter: { serviceId: s.serviceId },
+            update: { $set: s },
+            upsert: true
+          }
+        }))
+      );
+
       services = formatted;
     }
 
@@ -269,25 +276,25 @@ app.get("/api/services", async (req, res) => {
       data: grouped
     });
 
-  } catch (error) {
-    console.error("❌ Error fetching services:", error.message);
-    res.status(500).json({ error: "Failed to load services" });
+  } catch (err) {
+    console.error("❌ SERVICES ERROR:", err.message);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to load services",
+      details: err.message
+    });
   }
 });
 
-// ================= PRICE CALCULATOR =================
+// ================= ORDER =================
 function calculateCost(rate, quantity) {
   return (rate / 1000) * quantity;
 }
 
-// ================= ORDER =================
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
-
-    if (!serviceId || !link || !quantity) {
-      return res.status(400).json({ error: "Missing fields" });
-    }
 
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
@@ -330,7 +337,6 @@ app.post("/api/order", auth, async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Order failed" });
   }
 });
@@ -365,8 +371,7 @@ app.post("/api/admin/approve", auth, async (req, res) => {
 
     res.json({ message: "Approved" });
 
-  } catch (err) {
-    console.error(err);
+  } catch {
     res.status(500).json({ error: "Approval failed" });
   }
 });
