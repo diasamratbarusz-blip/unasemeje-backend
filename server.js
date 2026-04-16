@@ -57,11 +57,21 @@ function auth(req, res, next) {
   }
 }
 
-// ================= PROFIT SYSTEM (FIXED) =================
+// ================= CLEAN SERVICE NAME =================
+function cleanName(name = "") {
+  return name
+    .replace(/^TTF\d+\s*/i, "")
+    .replace(/^TTV\d+\s*/i, "")
+    .replace(/^TTL\d+\s*/i, "")
+    .replace(/\[.*?\]/g, "")
+    .trim();
+}
+
+// ================= PROFIT SYSTEM =================
 function getProfitMargin(rate) {
-  // KSh pricing rule
-  if (rate < 50) return 0.90; // 90% profit
-  return 0.40;               // 40% profit
+  if (rate < 50) return 0.90;   // 90%
+  if (rate < 200) return 0.60;  // 60%
+  return 0.40;                  // 40%
 }
 
 function applyProfit(rate) {
@@ -125,125 +135,34 @@ app.get("/api/me", auth, async (req, res) => {
   }
 });
 
-// ================= MPESA TOKEN =================
-async function getMpesaToken() {
-  const key = process.env.MPESA_CONSUMER_KEY;
-  const secret = process.env.MPESA_CONSUMER_SECRET;
-
-  const auth = Buffer.from(`${key}:${secret}`).toString("base64");
-
-  const res = await axios.get(
-    "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
-    { headers: { Authorization: `Basic ${auth}` } }
-  );
-
-  return res.data.access_token;
-}
-
-// ================= MPESA STK =================
-app.post("/api/mpesa/stk", auth, async (req, res) => {
-  try {
-    const { phone, amount } = req.body;
-
-    const token = await getMpesaToken();
-
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[-:.TZ]/g, "")
-      .slice(0, 14);
-
-    const password = Buffer.from(
-      process.env.MPESA_SHORTCODE +
-      process.env.MPESA_PASSKEY +
-      timestamp
-    ).toString("base64");
-
-    await axios.post(
-      "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
-      {
-        BusinessShortCode: process.env.MPESA_SHORTCODE,
-        Password: password,
-        Timestamp: timestamp,
-        TransactionType: "CustomerPayBillOnline",
-        Amount: amount,
-        PartyA: phone,
-        PartyB: process.env.MPESA_SHORTCODE,
-        PhoneNumber: phone,
-        CallBackURL: process.env.CALLBACK_URL,
-        AccountReference: "SMM PANEL",
-        TransactionDesc: "Deposit"
-      },
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-
-    await Deposit.create({
-      userId: req.user.id,
-      phone,
-      amount,
-      status: "pending"
-    });
-
-    res.json({ message: "STK push sent" });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "STK failed" });
-  }
-});
-
-// ================= CALLBACK =================
-app.post("/api/mpesa/callback", async (req, res) => {
-  try {
-    const result = req.body?.Body?.stkCallback;
-
-    if (result?.ResultCode === 0) {
-      const items = result.CallbackMetadata.Item;
-
-      const amount = items.find(i => i.Name === "Amount")?.Value;
-      const phone = items.find(i => i.Name === "PhoneNumber")?.Value;
-
-      const user = await User.findOne({ phone });
-
-      if (user) {
-        user.balance += Number(amount);
-        await user.save();
-
-        await Deposit.findOneAndUpdate(
-          { phone, amount, status: "pending" },
-          { status: "completed" }
-        );
-      }
-    }
-
-    res.sendStatus(200);
-
-  } catch {
-    res.sendStatus(500);
-  }
-});
-
-// ================= SERVICES =================
+// ================= SERVICES (FIXED) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
     if (!services || services.length === 0) {
+
       console.log("⚠️ Fetching services from provider...");
 
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
+      const response = await axios.get(url, { timeout: 20000 });
 
-      const response = await axios.get(url, { timeout: 15000 });
+      let raw = response.data;
 
-      const raw = response.data;
+      let list = [];
 
-      let list = Array.isArray(raw) ? raw : Object.values(raw);
+      if (Array.isArray(raw)) {
+        list = raw;
+      } else if (typeof raw === "object") {
+        list = Object.values(raw);
+      }
 
       const formatted = list.map(s => ({
         serviceId: s.service,
-        name: s.name,
+        name: cleanName(s.name),
 
         baseRate: Number(s.rate),
-        rate: applyProfit(Number(s.rate)), // ✅ FIXED PROFIT SYSTEM
+        rate: applyProfit(Number(s.rate)),
 
         min: Number(s.min),
         max: Number(s.max),
@@ -263,7 +182,7 @@ app.get("/api/services", async (req, res) => {
       services = formatted;
     }
 
-    // GROUPING
+    // GROUP SERVICES
     const grouped = {};
 
     services.forEach(s => {
@@ -277,7 +196,11 @@ app.get("/api/services", async (req, res) => {
       else if (cat.includes("twitter") || cat.includes("x")) platform = "Twitter/X";
 
       if (!grouped[platform]) grouped[platform] = [];
-      grouped[platform].push(s);
+
+      grouped[platform].push({
+        ...s,
+        rate: Number(s.rate).toFixed(2)
+      });
     });
 
     res.json({ success: true, data: grouped });
