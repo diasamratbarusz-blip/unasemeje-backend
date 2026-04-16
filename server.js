@@ -120,10 +120,6 @@ async function getMpesaToken() {
   const key = process.env.MPESA_CONSUMER_KEY;
   const secret = process.env.MPESA_CONSUMER_SECRET;
 
-  if (!key || !secret) {
-    throw new Error("Missing MPESA credentials");
-  }
-
   const auth = Buffer.from(`${key}:${secret}`).toString("base64");
 
   const res = await axios.get(
@@ -221,43 +217,57 @@ app.post("/api/mpesa/callback", async (req, res) => {
   }
 });
 
-// ================= SERVICES =================
+// ================= SERVICES (FIXED + GROUPED + PROVIDER SYNC) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
     if (!services || services.length === 0) {
       console.log("⚠️ Fetching services from provider...");
-      console.log("URL:", process.env.SMM_API_URL);
 
-      const params = new URLSearchParams();
-      params.append("key", process.env.SMM_API_KEY);
-      params.append("action", "services");
+      const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
 
-      const response = await axios.post(process.env.SMM_API_URL, params);
+      const response = await axios.get(url);
 
-      console.log("✅ Provider response:", response.data);
-
-      const providerServices = response.data;
-
-      if (Array.isArray(providerServices)) {
-        const formatted = providerServices.map(s => ({
-          serviceId: s.service,
-          name: s.name,
-          rate: s.rate,
-          min: s.min,
-          max: s.max,
-          category: s.category
-        }));
-
-        await Service.insertMany(formatted);
-        services = formatted;
-      } else {
+      if (!Array.isArray(response.data)) {
         return res.status(500).json({ error: "Invalid provider response" });
       }
+
+      const formatted = response.data.map(s => ({
+        serviceId: s.service,
+        name: s.name,
+        rate: Number(s.rate),
+        min: Number(s.min),
+        max: Number(s.max),
+        category: s.category || "Other"
+      }));
+
+      await Service.insertMany(formatted);
+      services = formatted;
     }
 
-    res.json(services);
+    // ================= GROUPING =================
+    const grouped = {};
+
+    services.forEach(s => {
+      const cat = (s.category || "").toLowerCase();
+
+      let platform = "Other";
+      if (cat.includes("instagram")) platform = "Instagram";
+      else if (cat.includes("tiktok")) platform = "TikTok";
+      else if (cat.includes("youtube")) platform = "YouTube";
+      else if (cat.includes("facebook")) platform = "Facebook";
+      else if (cat.includes("twitter") || cat.includes("x")) platform = "Twitter/X";
+
+      if (!grouped[platform]) grouped[platform] = [];
+
+      grouped[platform].push(s);
+    });
+
+    res.json({
+      success: true,
+      data: grouped
+    });
 
   } catch (error) {
     console.error("❌ Error fetching services:", error.message);
@@ -265,11 +275,12 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// ================= ORDER =================
+// ================= PRICE CALCULATOR =================
 function calculateCost(rate, quantity) {
   return (rate / 1000) * quantity;
 }
 
+// ================= ORDER =================
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
