@@ -14,61 +14,80 @@ if (!process.env.SMM_API_URL || !process.env.SMM_API_KEY) {
 
 /**
  * =========================================
- * FETCH FROM PROVIDER
+ * FETCH FROM PROVIDER (FIXED)
  * =========================================
  */
 const fetchProviderServices = async () => {
-  const params = new URLSearchParams();
-  params.append("key", process.env.SMM_API_KEY);
-  params.append("action", "services");
+  try {
+    const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
 
-  const response = await axios.post(process.env.SMM_API_URL, params, {
-    timeout: 15000
-  });
+    const response = await axios.get(url, {
+      timeout: 15000
+    });
 
-  if (!Array.isArray(response.data)) {
-    throw new Error("Invalid provider response");
+    const raw = response.data;
+
+    if (!raw) {
+      throw new Error("Empty provider response");
+    }
+
+    // SAFE NORMALIZATION (ARRAY OR OBJECT)
+    let servicesArray = [];
+
+    if (Array.isArray(raw)) {
+      servicesArray = raw;
+    } else {
+      servicesArray = Object.values(raw);
+    }
+
+    return servicesArray.map((s) => ({
+      serviceId: s.service,
+      name: s.name,
+      rate: Number(s.rate),
+      min: Number(s.min),
+      max: Number(s.max),
+      category: s.category || "Other",
+      status: "active"
+    }));
+
+  } catch (err) {
+    console.error("❌ PROVIDER FETCH ERROR:", err.message);
+    throw err;
   }
-
-  return response.data.map((s) => ({
-    serviceId: s.service,
-    name: s.name,
-    rate: Number(s.rate),
-    min: Number(s.min),
-    max: Number(s.max),
-    category: s.category || "Other",
-    status: "active"
-  }));
 };
 
 /**
  * =========================================
- * UPSERT SERVICES INTO DB (NO DUPLICATES)
+ * UPSERT SERVICES INTO DB
  * =========================================
  */
 const syncServicesToDB = async (services) => {
-  const bulkOps = services.map((s) => ({
-    updateOne: {
-      filter: { serviceId: s.serviceId },
-      update: { $set: s },
-      upsert: true
-    }
-  }));
+  try {
+    const bulkOps = services.map((s) => ({
+      updateOne: {
+        filter: { serviceId: s.serviceId },
+        update: { $set: s },
+        upsert: true
+      }
+    }));
 
-  await Service.bulkWrite(bulkOps);
+    await Service.bulkWrite(bulkOps);
+  } catch (err) {
+    console.error("❌ DB SYNC ERROR:", err.message);
+  }
 };
 
 /**
  * =========================================
  * GET FLAT SERVICES (FRONTEND SAFE)
  * =========================================
- * Use: /api/services/all
+ * /api/services/all
  */
 router.get("/all", async (req, res) => {
   try {
     let services = await Service.find({ status: "active" });
 
-    if (!services || services.length === 0) {
+    if (!services.length) {
       const providerServices = await fetchProviderServices();
       await syncServicesToDB(providerServices);
       services = providerServices;
@@ -92,15 +111,15 @@ router.get("/all", async (req, res) => {
 
 /**
  * =========================================
- * GET GROUPED SERVICES (DASHBOARD VIEW)
+ * GET GROUPED SERVICES (DASHBOARD)
  * =========================================
- * Use: /api/services
+ * /api/services
  */
 router.get("/", async (req, res) => {
   try {
     let services = await Service.find({ status: "active" });
 
-    if (!services || services.length === 0) {
+    if (!services.length) {
       const providerServices = await fetchProviderServices();
       await syncServicesToDB(providerServices);
       services = providerServices;
