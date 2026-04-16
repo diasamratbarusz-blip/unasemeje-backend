@@ -109,7 +109,7 @@ app.get("/api/me", auth, async (req, res) => {
   }
 });
 
-// ================= MPESA =================
+// ================= MPESA TOKEN =================
 async function getMpesaToken() {
   const key = process.env.MPESA_CONSUMER_KEY;
   const secret = process.env.MPESA_CONSUMER_SECRET;
@@ -206,12 +206,12 @@ app.post("/api/mpesa/callback", async (req, res) => {
   }
 });
 
-// ================= SERVICES (FIXED & STABLE) =================
+// ================= SERVICES (FIXED + STABLE) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
-    // IF DB EMPTY → FETCH FROM PROVIDER
+    // IF EMPTY → FETCH FROM PROVIDER
     if (!services || services.length === 0) {
       console.log("⚠️ Fetching services from provider...");
 
@@ -223,7 +223,6 @@ app.get("/api/services", async (req, res) => {
 
       let list = [];
 
-      // FIX: provider may return array OR object
       if (Array.isArray(raw)) {
         list = raw;
       } else {
@@ -239,7 +238,6 @@ app.get("/api/services", async (req, res) => {
         category: s.category || "Other"
       }));
 
-      // UPSERT (NO DUPLICATES)
       await Service.bulkWrite(
         formatted.map(s => ({
           updateOne: {
@@ -253,7 +251,7 @@ app.get("/api/services", async (req, res) => {
       services = formatted;
     }
 
-    // ================= GROUPING =================
+    // GROUPING
     const grouped = {};
 
     services.forEach(s => {
