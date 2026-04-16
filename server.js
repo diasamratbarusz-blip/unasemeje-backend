@@ -57,6 +57,22 @@ function auth(req, res, next) {
   }
 }
 
+// ================= PROFIT SYSTEM (FIXED) =================
+function getProfitMargin(rate) {
+  // KSh pricing rule
+  if (rate < 50) return 0.90; // 90% profit
+  return 0.40;               // 40% profit
+}
+
+function applyProfit(rate) {
+  return Number((rate + rate * getProfitMargin(rate)).toFixed(2));
+}
+
+function calculateCost(rate, quantity) {
+  const sellingRate = applyProfit(rate);
+  return (sellingRate / 1000) * quantity;
+}
+
 // ================= ROOT =================
 app.get("/", (req, res) => {
   res.send("🚀 Backend running successfully");
@@ -206,12 +222,11 @@ app.post("/api/mpesa/callback", async (req, res) => {
   }
 });
 
-// ================= SERVICES (FIXED + STABLE) =================
+// ================= SERVICES =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
-    // IF EMPTY → FETCH FROM PROVIDER
     if (!services || services.length === 0) {
       console.log("⚠️ Fetching services from provider...");
 
@@ -221,18 +236,15 @@ app.get("/api/services", async (req, res) => {
 
       const raw = response.data;
 
-      let list = [];
-
-      if (Array.isArray(raw)) {
-        list = raw;
-      } else {
-        list = Object.values(raw);
-      }
+      let list = Array.isArray(raw) ? raw : Object.values(raw);
 
       const formatted = list.map(s => ({
         serviceId: s.service,
         name: s.name,
-        rate: Number(s.rate),
+
+        baseRate: Number(s.rate),
+        rate: applyProfit(Number(s.rate)), // ✅ FIXED PROFIT SYSTEM
+
         min: Number(s.min),
         max: Number(s.max),
         category: s.category || "Other"
@@ -265,14 +277,10 @@ app.get("/api/services", async (req, res) => {
       else if (cat.includes("twitter") || cat.includes("x")) platform = "Twitter/X";
 
       if (!grouped[platform]) grouped[platform] = [];
-
       grouped[platform].push(s);
     });
 
-    res.json({
-      success: true,
-      data: grouped
-    });
+    res.json({ success: true, data: grouped });
 
   } catch (err) {
     console.error("❌ SERVICES ERROR:", err.message);
@@ -286,10 +294,6 @@ app.get("/api/services", async (req, res) => {
 });
 
 // ================= ORDER =================
-function calculateCost(rate, quantity) {
-  return (rate / 1000) * quantity;
-}
-
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -297,7 +301,7 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    const cost = calculateCost(service.rate, quantity);
+    const cost = calculateCost(service.baseRate, quantity);
 
     const user = await User.findById(req.user.id);
 
