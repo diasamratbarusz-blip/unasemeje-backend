@@ -23,7 +23,7 @@ const smmRequest = require("./utils/smmApi");
 
 // ================= VALIDATE ENV =================
 if (!process.env.JWT_SECRET) {
-  console.error("❌ JWT_SECRET missing in environment variables");
+  console.error("❌ JWT_SECRET missing");
   process.exit(1);
 }
 
@@ -35,14 +35,14 @@ app.use(express.json());
 connectDB();
 log("Server starting...");
 
-// ================= CURRENCY CONFIG =================
+// ================= CONFIG =================
 const USD_TO_KSH = 160;
 
-// ================= AUTH MIDDLEWARE =================
+// ================= AUTH =================
 function auth(req, res, next) {
   try {
     const header = req.headers.authorization;
-    if (!header) return res.status(401).json({ error: "No token provided" });
+    if (!header) return res.status(401).json({ error: "No token" });
 
     const token = header.split(" ")[1];
     req.user = jwt.verify(token, process.env.JWT_SECRET);
@@ -75,50 +75,45 @@ function detectPlatform(cat = "") {
   return "Other";
 }
 
-// ================= CURRENCY DETECTION =================
+// ================= CURRENCY =================
 function detectCurrency(rate) {
   rate = Number(rate);
 
-  // Very small values usually = USD
-  if (rate > 0 && rate < 2) return "USD";
-
+  if (rate > 0 && rate < 2) return "USD"; // small numbers → USD
   return "KES";
 }
 
 function toKsh(rate, currency) {
   rate = Number(rate);
 
-  if (currency === "USD") {
-    return rate * USD_TO_KSH;
-  }
-
+  if (currency === "USD") return rate * USD_TO_KSH;
   return rate;
 }
 
-// ================= PRICE MARKUP SYSTEM =================
+// ================= MARKUP =================
 function applyMarkup(rate) {
   rate = Number(rate);
 
   if (rate < 10) return rate + 30;
-  if (rate >= 10 && rate < 20) return rate + 30;
-  if (rate >= 20 && rate < 30) return rate + 20;
-  if (rate >= 30 && rate < 40) return rate + 16;
-  if (rate >= 40 && rate < 50) return rate + 12;
-  if (rate >= 50 && rate < 60) return rate + 12;
-  if (rate >= 60 && rate < 70) return rate + 12;
-  if (rate >= 70 && rate < 100) return rate + 15;
+  if (rate < 20) return rate + 30;
+  if (rate < 30) return rate + 20;
+  if (rate < 40) return rate + 16;
+  if (rate < 50) return rate + 12;
+  if (rate < 60) return rate + 12;
+  if (rate < 70) return rate + 12;
+  if (rate < 100) return rate + 15;
 
   return rate + 30;
 }
 
-// ================= ORDER COST =================
-function calculateCost(rate, qty) {
-  return (applyMarkup(rate) / 1000) * qty;
+// ✅ IMPORTANT: NO DOUBLE MARKUP HERE
+function calculateCost(sellingRate, qty) {
+  return (Number(sellingRate) / 1000) * qty;
 }
 
 // ================= ROOT =================
 app.get("/", (req, res) => {
-  res.send("🚀 SMM Backend Running");
+  res.send("🚀 Backend running");
 });
 
 // ================= AUTH =================
@@ -127,15 +122,15 @@ app.post("/api/register", async (req, res) => {
     const { email, password, phone } = req.body;
 
     if (!email || !password)
-      return res.status(400).json({ error: "Email and password required" });
+      return res.status(400).json({ error: "Missing fields" });
 
     const exists = await User.findOne({ email });
-    if (exists) return res.status(400).json({ error: "User already exists" });
+    if (exists) return res.status(400).json({ error: "User exists" });
 
     await User.create({ email, password, phone });
 
-    res.json({ message: "Registered successfully" });
-  } catch (err) {
+    res.json({ message: "Registered" });
+  } catch {
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -145,10 +140,10 @@ app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
 
     const user = await User.findOne({ email, password });
-    if (!user) return res.status(400).json({ error: "Invalid credentials" });
+    if (!user) return res.status(400).json({ error: "Invalid login" });
 
     const token = jwt.sign(
-      { id: user._id, role: user.role, email: user.email },
+      { id: user._id, email: user.email },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -160,12 +155,8 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.get("/api/me", auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-    res.json(user);
-  } catch {
-    res.status(500).json({ error: "Failed to load user" });
-  }
+  const user = await User.findById(req.user.id);
+  res.json(user);
 });
 
 // ================= MPESA =================
@@ -225,119 +216,62 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
     });
 
     res.json({ message: "STK sent" });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "STK failed" });
-  }
-});
-
-app.post("/api/mpesa/callback", async (req, res) => {
-  try {
-    const cb = req.body?.Body?.stkCallback;
-
-    if (cb?.ResultCode === 0) {
-      const items = cb.CallbackMetadata.Item;
-
-      const amount = items.find(i => i.Name === "Amount")?.Value;
-      const phone = items.find(i => i.Name === "PhoneNumber")?.Value;
-
-      const user = await User.findOne({ phone });
-
-      if (user) {
-        user.balance += Number(amount);
-        await user.save();
-
-        await Deposit.findOneAndUpdate(
-          { phone, amount, status: "pending" },
-          { status: "completed" }
-        );
-      }
-    }
-
-    res.sendStatus(200);
   } catch {
-    res.sendStatus(500);
+    res.status(500).json({ error: "STK failed" });
   }
 });
 
 // ================= SERVICES =================
 app.get("/api/services", async (req, res) => {
   try {
-    let services = await Service.find({ status: "active" });
+    let services = await Service.find();
 
     if (!services.length) {
-      console.log("⚠️ Fetching provider services...");
-
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
-      const response = await axios.get(url, { timeout: 20000 });
+      const response = await axios.get(url);
 
-      const raw = response.data;
-      const list = Array.isArray(raw) ? raw : Object.values(raw);
+      const list = Array.isArray(response.data)
+        ? response.data
+        : Object.values(response.data);
 
-      const formatted = list
-        .map(s => {
-          let rawRate = Number(s.rate || s.cost || 0);
+      const formatted = list.map(s => {
+        let rawRate = Number(s.rate || 0);
 
-          const currency = detectCurrency(rawRate);
-          const baseRate = toKsh(rawRate, currency);
+        const currency = detectCurrency(rawRate);
+        const baseRate = toKsh(rawRate, currency);
 
-          return {
-            serviceId: String(s.service || s.id || ""),
-            name: cleanName(s.name || s.title || ""),
+        return {
+          serviceId: String(s.service),
+          name: cleanName(s.name),
 
-            rate: baseRate,
-            sellingRate: applyMarkup(baseRate),
+          providerRate: baseRate,
+          sellingRate: applyMarkup(baseRate),
 
-            min: Number(s.min || 1),
-            max: Number(s.max || 100000),
+          min: Number(s.min),
+          max: Number(s.max),
+          category: s.category || "Other",
+          platform: detectPlatform(s.category)
+        };
+      });
 
-            category: s.category || "Other",
-            platform: detectPlatform(s.category || "")
-          };
-        })
-        .filter(s => s.serviceId && s.name);
-
-      await Service.bulkWrite(
-        formatted.map(s => ({
-          updateOne: {
-            filter: { serviceId: s.serviceId },
-            update: { $set: s },
-            upsert: true
-          }
-        }))
-      );
-
+      await Service.insertMany(formatted);
       services = formatted;
     }
 
-    const grouped = {};
-
-    services.forEach(s => {
-      const platform = s.platform || "Other";
-
-      if (!grouped[platform]) grouped[platform] = [];
-
-      grouped[platform].push({
+    res.json({
+      success: true,
+      data: services.map(s => ({
         serviceId: s.serviceId,
         name: s.name,
-        rate: Number(s.sellingRate).toFixed(2),
+        rate: s.sellingRate,
         min: s.min,
         max: s.max,
         category: s.category
-      });
+      }))
     });
-
-    res.json({ success: true, data: grouped });
 
   } catch (err) {
-    console.error("SERVICES ERROR:", err.message);
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to load services",
-      details: err.message
-    });
+    res.status(500).json({ error: "Services failed" });
   }
 });
 
@@ -347,9 +281,8 @@ app.post("/api/order", auth, async (req, res) => {
     const { serviceId, link, quantity } = req.body;
 
     const service = await Service.findOne({ serviceId });
-    if (!service) return res.status(404).json({ error: "Service not found" });
 
-    const cost = calculateCost(service.rate, quantity);
+    const cost = calculateCost(service.sellingRate, quantity);
 
     const user = await User.findById(req.user.id);
 
@@ -364,10 +297,6 @@ app.post("/api/order", auth, async (req, res) => {
       quantity
     });
 
-    if (!response?.order) {
-      return res.status(500).json({ error: "SMM API failed" });
-    }
-
     user.balance -= cost;
     await user.save();
 
@@ -376,29 +305,21 @@ app.post("/api/order", auth, async (req, res) => {
       service: service.name,
       link,
       quantity,
-      smmOrderId: response.order,
-      cost
+      cost,
+      smmOrderId: response.order
     });
 
-    res.json({
-      message: "Order placed",
-      order,
-      balance: user.balance
-    });
+    res.json({ message: "Order placed", order });
 
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Order failed" });
   }
 });
 
 // ================= ORDERS =================
 app.get("/api/orders", auth, async (req, res) => {
-  try {
-    const orders = await Order.find({ userId: req.user.id });
-    res.json(orders);
-  } catch {
-    res.status(500).json({ error: "Failed to fetch orders" });
-  }
+  const orders = await Order.find({ userId: req.user.id });
+  res.json(orders);
 });
 
 // ================= START =================
@@ -406,5 +327,4 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log("🚀 Server running on", PORT);
-  log("Server running");
 });
