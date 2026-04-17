@@ -21,7 +21,7 @@ const Service = require("./models/Service");
 // UTILS
 const smmRequest = require("./utils/smmApi");
 
-// ================= VALIDATE ENV =================
+// ================= ENV CHECK =================
 if (!process.env.JWT_SECRET) {
   console.error("❌ JWT_SECRET missing");
   process.exit(1);
@@ -42,7 +42,7 @@ const USD_TO_KSH = 160;
 function auth(req, res, next) {
   try {
     const header = req.headers.authorization;
-    if (!header) return res.status(401).json({ error: "No token" });
+    if (!header) return res.status(401).json({ error: "No token provided" });
 
     const token = header.split(" ")[1];
     req.user = jwt.verify(token, process.env.JWT_SECRET);
@@ -79,15 +79,17 @@ function detectPlatform(cat = "") {
 function detectCurrency(rate) {
   rate = Number(rate);
 
-  if (rate > 0 && rate < 2) return "USD"; // small numbers → USD
+  // If very small → USD
+  if (rate > 0 && rate < 5) return "USD";
+
   return "KES";
 }
 
-function toKsh(rate, currency) {
+function convertToKsh(rate) {
+  const currency = detectCurrency(rate);
   rate = Number(rate);
 
-  if (currency === "USD") return rate * USD_TO_KSH;
-  return rate;
+  return currency === "USD" ? rate * USD_TO_KSH : rate;
 }
 
 // ================= MARKUP =================
@@ -106,31 +108,32 @@ function applyMarkup(rate) {
   return rate + 30;
 }
 
-// ✅ IMPORTANT: NO DOUBLE MARKUP HERE
+// ⚠️ IMPORTANT: NO MARKUP HERE AGAIN
 function calculateCost(sellingRate, qty) {
-  return (Number(sellingRate) / 1000) * qty;
+  return (Number(sellingRate) / 1000) * Number(qty);
 }
 
 // ================= ROOT =================
 app.get("/", (req, res) => {
-  res.send("🚀 Backend running");
+  res.send("🚀 SMM Backend Running");
 });
 
-// ================= AUTH =================
+// ================= AUTH ROUTES =================
 app.post("/api/register", async (req, res) => {
   try {
     const { email, password, phone } = req.body;
 
     if (!email || !password)
-      return res.status(400).json({ error: "Missing fields" });
+      return res.status(400).json({ error: "Email & password required" });
 
     const exists = await User.findOne({ email });
-    if (exists) return res.status(400).json({ error: "User exists" });
+    if (exists) return res.status(400).json({ error: "User already exists" });
 
     await User.create({ email, password, phone });
 
-    res.json({ message: "Registered" });
-  } catch {
+    res.json({ message: "Registered successfully" });
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -155,8 +158,12 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.get("/api/me", auth, async (req, res) => {
-  const user = await User.findById(req.user.id);
-  res.json(user);
+  try {
+    const user = await User.findById(req.user.id);
+    res.json(user);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch user" });
+  }
 });
 
 // ================= MPESA =================
@@ -216,8 +223,40 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
     });
 
     res.json({ message: "STK sent" });
-  } catch {
+
+  } catch (err) {
+    console.error(err.message);
     res.status(500).json({ error: "STK failed" });
+  }
+});
+
+// ================= CALLBACK =================
+app.post("/api/mpesa/callback", async (req, res) => {
+  try {
+    const cb = req.body?.Body?.stkCallback;
+
+    if (cb?.ResultCode === 0) {
+      const items = cb.CallbackMetadata.Item;
+
+      const amount = items.find(i => i.Name === "Amount")?.Value;
+      const phone = items.find(i => i.Name === "PhoneNumber")?.Value;
+
+      const user = await User.findOne({ phone });
+
+      if (user) {
+        user.balance += Number(amount);
+        await user.save();
+
+        await Deposit.findOneAndUpdate(
+          { phone, amount, status: "pending" },
+          { status: "completed" }
+        );
+      }
+    }
+
+    res.sendStatus(200);
+  } catch {
+    res.sendStatus(500);
   }
 });
 
@@ -227,6 +266,8 @@ app.get("/api/services", async (req, res) => {
     let services = await Service.find();
 
     if (!services.length) {
+      console.log("Fetching provider services...");
+
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url);
 
@@ -234,27 +275,38 @@ app.get("/api/services", async (req, res) => {
         ? response.data
         : Object.values(response.data);
 
-      const formatted = list.map(s => {
-        let rawRate = Number(s.rate || 0);
+      const formatted = list
+        .map(s => {
+          if (!s.service || !s.rate) return null;
 
-        const currency = detectCurrency(rawRate);
-        const baseRate = toKsh(rawRate, currency);
+          const baseRate = convertToKsh(s.rate);
 
-        return {
-          serviceId: String(s.service),
-          name: cleanName(s.name),
+          return {
+            serviceId: String(s.service),
+            name: cleanName(s.name),
 
-          providerRate: baseRate,
-          sellingRate: applyMarkup(baseRate),
+            providerRate: baseRate,
+            sellingRate: applyMarkup(baseRate),
 
-          min: Number(s.min),
-          max: Number(s.max),
-          category: s.category || "Other",
-          platform: detectPlatform(s.category)
-        };
-      });
+            min: Number(s.min || 1),
+            max: Number(s.max || 100000),
 
-      await Service.insertMany(formatted);
+            category: s.category || "Other",
+            platform: detectPlatform(s.category)
+          };
+        })
+        .filter(Boolean);
+
+      await Service.bulkWrite(
+        formatted.map(s => ({
+          updateOne: {
+            filter: { serviceId: s.serviceId },
+            update: { $set: s },
+            upsert: true
+          }
+        }))
+      );
+
       services = formatted;
     }
 
@@ -263,7 +315,7 @@ app.get("/api/services", async (req, res) => {
       data: services.map(s => ({
         serviceId: s.serviceId,
         name: s.name,
-        rate: s.sellingRate,
+        rate: Number(s.sellingRate).toFixed(2),
         min: s.min,
         max: s.max,
         category: s.category
@@ -271,7 +323,8 @@ app.get("/api/services", async (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: "Services failed" });
+    console.error(err.message);
+    res.status(500).json({ error: "Failed to load services" });
   }
 });
 
@@ -281,6 +334,7 @@ app.post("/api/order", auth, async (req, res) => {
     const { serviceId, link, quantity } = req.body;
 
     const service = await Service.findOne({ serviceId });
+    if (!service) return res.status(404).json({ error: "Service not found" });
 
     const cost = calculateCost(service.sellingRate, quantity);
 
@@ -297,6 +351,10 @@ app.post("/api/order", auth, async (req, res) => {
       quantity
     });
 
+    if (!response?.order) {
+      return res.status(500).json({ error: "Provider failed" });
+    }
+
     user.balance -= cost;
     await user.save();
 
@@ -309,17 +367,26 @@ app.post("/api/order", auth, async (req, res) => {
       smmOrderId: response.order
     });
 
-    res.json({ message: "Order placed", order });
+    res.json({
+      message: "Order placed",
+      order,
+      balance: user.balance
+    });
 
-  } catch {
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Order failed" });
   }
 });
 
 // ================= ORDERS =================
 app.get("/api/orders", auth, async (req, res) => {
-  const orders = await Order.find({ userId: req.user.id });
-  res.json(orders);
+  try {
+    const orders = await Order.find({ userId: req.user.id });
+    res.json(orders);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch orders" });
+  }
 });
 
 // ================= START =================
@@ -327,4 +394,5 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log("🚀 Server running on", PORT);
+  log("Server running");
 });
