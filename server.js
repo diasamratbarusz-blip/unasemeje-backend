@@ -21,13 +21,13 @@ const Service = require("./models/Service");
 // UTILS
 const smmRequest = require("./utils/smmApi");
 
-// ================= ENV CHECK =================
+// ================= VALIDATE ENV =================
 if (!process.env.JWT_SECRET) {
   console.error("❌ JWT_SECRET missing in environment variables");
   process.exit(1);
 }
 
-// ================= APP INIT =================
+// ================= INIT =================
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -35,7 +35,10 @@ app.use(express.json());
 connectDB();
 log("Server starting...");
 
-// ================= AUTH =================
+// ================= CURRENCY CONFIG =================
+const USD_TO_KSH = 160;
+
+// ================= AUTH MIDDLEWARE =================
 function auth(req, res, next) {
   try {
     const header = req.headers.authorization;
@@ -72,7 +75,27 @@ function detectPlatform(cat = "") {
   return "Other";
 }
 
-// ================= PRICE MARKUP (YOUR SYSTEM) =================
+// ================= CURRENCY DETECTION =================
+function detectCurrency(rate) {
+  rate = Number(rate);
+
+  // Very small values usually = USD
+  if (rate > 0 && rate < 2) return "USD";
+
+  return "KES";
+}
+
+function toKsh(rate, currency) {
+  rate = Number(rate);
+
+  if (currency === "USD") {
+    return rate * USD_TO_KSH;
+  }
+
+  return rate;
+}
+
+// ================= PRICE MARKUP SYSTEM =================
 function applyMarkup(rate) {
   rate = Number(rate);
 
@@ -88,10 +111,9 @@ function applyMarkup(rate) {
   return rate + 30;
 }
 
-// ================= COST =================
+// ================= ORDER COST =================
 function calculateCost(rate, qty) {
-  const sellingRate = applyMarkup(rate);
-  return (sellingRate / 1000) * qty;
+  return (applyMarkup(rate) / 1000) * qty;
 }
 
 // ================= ROOT =================
@@ -104,13 +126,16 @@ app.post("/api/register", async (req, res) => {
   try {
     const { email, password, phone } = req.body;
 
+    if (!email || !password)
+      return res.status(400).json({ error: "Email and password required" });
+
     const exists = await User.findOne({ email });
     if (exists) return res.status(400).json({ error: "User already exists" });
 
     await User.create({ email, password, phone });
 
     res.json({ message: "Registered successfully" });
-  } catch {
+  } catch (err) {
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -250,23 +275,28 @@ app.get("/api/services", async (req, res) => {
       const raw = response.data;
       const list = Array.isArray(raw) ? raw : Object.values(raw);
 
-      const formatted = list.map(s => {
-        const baseRate = Number(s.rate || s.cost || 0);
+      const formatted = list
+        .map(s => {
+          let rawRate = Number(s.rate || s.cost || 0);
 
-        return {
-          serviceId: String(s.service || s.id || ""),
-          name: cleanName(s.name || s.title || "Service"),
+          const currency = detectCurrency(rawRate);
+          const baseRate = toKsh(rawRate, currency);
 
-          rate: baseRate,
-          sellingRate: applyMarkup(baseRate),
+          return {
+            serviceId: String(s.service || s.id || ""),
+            name: cleanName(s.name || s.title || ""),
 
-          min: Number(s.min || 1),
-          max: Number(s.max || 100000),
+            rate: baseRate,
+            sellingRate: applyMarkup(baseRate),
 
-          category: s.category || "Other",
-          platform: detectPlatform(s.category || "")
-        };
-      }).filter(s => s.serviceId && s.name);
+            min: Number(s.min || 1),
+            max: Number(s.max || 100000),
+
+            category: s.category || "Other",
+            platform: detectPlatform(s.category || "")
+          };
+        })
+        .filter(s => s.serviceId && s.name);
 
       await Service.bulkWrite(
         formatted.map(s => ({
@@ -301,6 +331,8 @@ app.get("/api/services", async (req, res) => {
     res.json({ success: true, data: grouped });
 
   } catch (err) {
+    console.error("SERVICES ERROR:", err.message);
+
     res.status(500).json({
       success: false,
       error: "Failed to load services",
@@ -354,7 +386,7 @@ app.post("/api/order", auth, async (req, res) => {
       balance: user.balance
     });
 
-  } catch {
+  } catch (err) {
     res.status(500).json({ error: "Order failed" });
   }
 });
