@@ -21,13 +21,13 @@ const Service = require("./models/Service");
 // UTILS
 const smmRequest = require("./utils/smmApi");
 
-// ================= VALIDATE ENV =================
+// ================= ENV CHECK =================
 if (!process.env.JWT_SECRET) {
   console.error("❌ JWT_SECRET missing in environment variables");
   process.exit(1);
 }
 
-// ================= INIT =================
+// ================= APP INIT =================
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -35,7 +35,7 @@ app.use(express.json());
 connectDB();
 log("Server starting...");
 
-// ================= AUTH MIDDLEWARE =================
+// ================= AUTH =================
 function auth(req, res, next) {
   try {
     const header = req.headers.authorization;
@@ -72,19 +72,26 @@ function detectPlatform(cat = "") {
   return "Other";
 }
 
-// ================= PROFIT SYSTEM =================
-function getProfitMargin(rate) {
-  if (rate < 50) return 0.90;
-  if (rate < 200) return 0.60;
-  return 0.40;
+// ================= PRICE MARKUP (YOUR SYSTEM) =================
+function applyMarkup(rate) {
+  rate = Number(rate);
+
+  if (rate < 10) return rate + 30;
+  if (rate >= 10 && rate < 20) return rate + 30;
+  if (rate >= 20 && rate < 30) return rate + 20;
+  if (rate >= 30 && rate < 40) return rate + 16;
+  if (rate >= 40 && rate < 50) return rate + 12;
+  if (rate >= 50 && rate < 60) return rate + 12;
+  if (rate >= 60 && rate < 70) return rate + 12;
+  if (rate >= 70 && rate < 100) return rate + 15;
+
+  return rate + 30;
 }
 
-function applyProfit(rate) {
-  return Number((rate + rate * getProfitMargin(rate)).toFixed(2));
-}
-
+// ================= COST =================
 function calculateCost(rate, qty) {
-  return (applyProfit(rate) / 1000) * qty;
+  const sellingRate = applyMarkup(rate);
+  return (sellingRate / 1000) * qty;
 }
 
 // ================= ROOT =================
@@ -97,17 +104,13 @@ app.post("/api/register", async (req, res) => {
   try {
     const { email, password, phone } = req.body;
 
-    if (!email || !password)
-      return res.status(400).json({ error: "Email and password required" });
-
     const exists = await User.findOne({ email });
     if (exists) return res.status(400).json({ error: "User already exists" });
 
     await User.create({ email, password, phone });
 
     res.json({ message: "Registered successfully" });
-  } catch (err) {
-    console.error(err);
+  } catch {
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -154,7 +157,6 @@ async function getMpesaToken() {
   return res.data.access_token;
 }
 
-// ================= MPESA STK =================
 app.post("/api/mpesa/stk", auth, async (req, res) => {
   try {
     const { phone, amount } = req.body;
@@ -198,13 +200,13 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
     });
 
     res.json({ message: "STK sent" });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "STK failed" });
   }
 });
 
-// ================= CALLBACK =================
 app.post("/api/mpesa/callback", async (req, res) => {
   try {
     const cb = req.body?.Body?.stkCallback;
@@ -234,7 +236,7 @@ app.post("/api/mpesa/callback", async (req, res) => {
   }
 });
 
-// ================= SERVICES (FIXED - NO UNDEFINED NAMES) =================
+// ================= SERVICES =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find({ status: "active" });
@@ -253,12 +255,10 @@ app.get("/api/services", async (req, res) => {
 
         return {
           serviceId: String(s.service || s.id || ""),
-          name: cleanName(
-            s.name || s.title || s.service_name || `Service ${s.service || ""}`
-          ),
+          name: cleanName(s.name || s.title || "Service"),
 
           rate: baseRate,
-          sellingRate: applyProfit(baseRate),
+          sellingRate: applyMarkup(baseRate),
 
           min: Number(s.min || 1),
           max: Number(s.max || 100000),
@@ -266,7 +266,7 @@ app.get("/api/services", async (req, res) => {
           category: s.category || "Other",
           platform: detectPlatform(s.category || "")
         };
-      }).filter(s => s.serviceId && s.name); // 🔥 prevents undefined services
+      }).filter(s => s.serviceId && s.name);
 
       await Service.bulkWrite(
         formatted.map(s => ({
@@ -290,7 +290,7 @@ app.get("/api/services", async (req, res) => {
 
       grouped[platform].push({
         serviceId: s.serviceId,
-        name: s.name, // ✅ ALWAYS SAFE NOW
+        name: s.name,
         rate: Number(s.sellingRate).toFixed(2),
         min: s.min,
         max: s.max,
@@ -301,7 +301,6 @@ app.get("/api/services", async (req, res) => {
     res.json({ success: true, data: grouped });
 
   } catch (err) {
-    console.error("SERVICES ERROR:", err.message);
     res.status(500).json({
       success: false,
       error: "Failed to load services",
@@ -355,7 +354,7 @@ app.post("/api/order", auth, async (req, res) => {
       balance: user.balance
     });
 
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Order failed" });
   }
 });
