@@ -1,7 +1,6 @@
 // ================= IMPORTS =================
 require("dotenv").config();
 
-// ✅ DEBUG ENV VARIABLES (ADDED)
 console.log("SMM_API_URL:", process.env.SMM_API_URL);
 console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
 
@@ -30,11 +29,9 @@ if (!process.env.JWT_SECRET) {
 
 // ================= INIT =================
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
-// ================= CONNECT DB =================
 connectDB();
 log("Server starting...");
 
@@ -42,24 +39,20 @@ log("Server starting...");
 function auth(req, res, next) {
   try {
     const header = req.headers.authorization;
-
-    if (!header) {
-      return res.status(401).json({ error: "No token provided" });
-    }
+    if (!header) return res.status(401).json({ error: "No token provided" });
 
     const token = header.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
 
-    req.user = decoded;
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ error: "Invalid token" });
   }
 }
 
-// ================= CLEAN SERVICE NAME =================
+// ================= HELPERS =================
 function cleanName(name = "") {
-  return name
+  return String(name)
     .replace(/^TTF\d+\s*/i, "")
     .replace(/^TTV\d+\s*/i, "")
     .replace(/^TTL\d+\s*/i, "")
@@ -67,25 +60,36 @@ function cleanName(name = "") {
     .trim();
 }
 
+function detectPlatform(cat = "") {
+  cat = String(cat).toLowerCase();
+
+  if (cat.includes("instagram")) return "Instagram";
+  if (cat.includes("tiktok")) return "TikTok";
+  if (cat.includes("youtube")) return "YouTube";
+  if (cat.includes("facebook")) return "Facebook";
+  if (cat.includes("twitter") || cat.includes("x")) return "Twitter/X";
+
+  return "Other";
+}
+
 // ================= PROFIT SYSTEM =================
 function getProfitMargin(rate) {
-  if (rate < 50) return 0.90;   // 90%
-  if (rate < 200) return 0.60;  // 60%
-  return 0.40;                  // 40%
+  if (rate < 50) return 0.90;
+  if (rate < 200) return 0.60;
+  return 0.40;
 }
 
 function applyProfit(rate) {
   return Number((rate + rate * getProfitMargin(rate)).toFixed(2));
 }
 
-function calculateCost(rate, quantity) {
-  const sellingRate = applyProfit(rate);
-  return (sellingRate / 1000) * quantity;
+function calculateCost(rate, qty) {
+  return (applyProfit(rate) / 1000) * qty;
 }
 
 // ================= ROOT =================
 app.get("/", (req, res) => {
-  res.send("🚀 Backend running successfully");
+  res.send("🚀 SMM Backend Running");
 });
 
 // ================= AUTH =================
@@ -93,14 +97,17 @@ app.post("/api/register", async (req, res) => {
   try {
     const { email, password, phone } = req.body;
 
+    if (!email || !password)
+      return res.status(400).json({ error: "Email and password required" });
+
     const exists = await User.findOne({ email });
     if (exists) return res.status(400).json({ error: "User already exists" });
 
     await User.create({ email, password, phone });
 
     res.json({ message: "Registered successfully" });
-
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -119,28 +126,25 @@ app.post("/api/login", async (req, res) => {
     );
 
     res.json({ token });
-
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Server error" });
   }
 });
 
-// ================= USER =================
 app.get("/api/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     res.json(user);
   } catch {
-    res.status(500).json({ error: "Failed to fetch user" });
+    res.status(500).json({ error: "Failed to load user" });
   }
 });
 
-// ================= MPESA TOKEN =================
+// ================= MPESA =================
 async function getMpesaToken() {
-  const key = process.env.MPESA_CONSUMER_KEY;
-  const secret = process.env.MPESA_CONSUMER_SECRET;
-
-  const auth = Buffer.from(`${key}:${secret}`).toString("base64");
+  const auth = Buffer.from(
+    `${process.env.MPESA_CONSUMER_KEY}:${process.env.MPESA_CONSUMER_SECRET}`
+  ).toString("base64");
 
   const res = await axios.get(
     "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
@@ -193,8 +197,7 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
       status: "pending"
     });
 
-    res.json({ message: "STK push sent" });
-
+    res.json({ message: "STK sent" });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "STK failed" });
@@ -204,10 +207,10 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
 // ================= CALLBACK =================
 app.post("/api/mpesa/callback", async (req, res) => {
   try {
-    const result = req.body?.Body?.stkCallback;
+    const cb = req.body?.Body?.stkCallback;
 
-    if (result?.ResultCode === 0) {
-      const items = result.CallbackMetadata.Item;
+    if (cb?.ResultCode === 0) {
+      const items = cb.CallbackMetadata.Item;
 
       const amount = items.find(i => i.Name === "Amount")?.Value;
       const phone = items.find(i => i.Name === "PhoneNumber")?.Value;
@@ -226,39 +229,44 @@ app.post("/api/mpesa/callback", async (req, res) => {
     }
 
     res.sendStatus(200);
-
   } catch {
     res.sendStatus(500);
   }
 });
 
-// ================= SERVICES =================
+// ================= SERVICES (FIXED - NO UNDEFINED NAMES) =================
 app.get("/api/services", async (req, res) => {
   try {
-    let services = await Service.find();
+    let services = await Service.find({ status: "active" });
 
-    if (!services || services.length === 0) {
-
-      console.log("⚠️ Fetching services from provider...");
+    if (!services.length) {
+      console.log("⚠️ Fetching provider services...");
 
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url, { timeout: 20000 });
 
-      let raw = response.data;
+      const raw = response.data;
+      const list = Array.isArray(raw) ? raw : Object.values(raw);
 
-      let list = Array.isArray(raw) ? raw : Object.values(raw);
+      const formatted = list.map(s => {
+        const baseRate = Number(s.rate || s.cost || 0);
 
-      const formatted = list.map(s => ({
-        serviceId: s.service,
-        name: cleanName(s.name),
+        return {
+          serviceId: String(s.service || s.id || ""),
+          name: cleanName(
+            s.name || s.title || s.service_name || `Service ${s.service || ""}`
+          ),
 
-        baseRate: Number(s.rate),
-        rate: applyProfit(Number(s.rate)),
+          rate: baseRate,
+          sellingRate: applyProfit(baseRate),
 
-        min: Number(s.min),
-        max: Number(s.max),
-        category: s.category || "Other"
-      }));
+          min: Number(s.min || 1),
+          max: Number(s.max || 100000),
+
+          category: s.category || "Other",
+          platform: detectPlatform(s.category || "")
+        };
+      }).filter(s => s.serviceId && s.name); // 🔥 prevents undefined services
 
       await Service.bulkWrite(
         formatted.map(s => ({
@@ -276,28 +284,24 @@ app.get("/api/services", async (req, res) => {
     const grouped = {};
 
     services.forEach(s => {
-      const cat = (s.category || "").toLowerCase();
-
-      let platform = "Other";
-      if (cat.includes("instagram")) platform = "Instagram";
-      else if (cat.includes("tiktok")) platform = "TikTok";
-      else if (cat.includes("youtube")) platform = "YouTube";
-      else if (cat.includes("facebook")) platform = "Facebook";
-      else if (cat.includes("twitter") || cat.includes("x")) platform = "Twitter/X";
+      const platform = s.platform || "Other";
 
       if (!grouped[platform]) grouped[platform] = [];
 
       grouped[platform].push({
-        ...s,
-        rate: Number(s.rate).toFixed(2)
+        serviceId: s.serviceId,
+        name: s.name, // ✅ ALWAYS SAFE NOW
+        rate: Number(s.sellingRate).toFixed(2),
+        min: s.min,
+        max: s.max,
+        category: s.category
       });
     });
 
     res.json({ success: true, data: grouped });
 
   } catch (err) {
-    console.error("❌ SERVICES ERROR:", err.message);
-
+    console.error("SERVICES ERROR:", err.message);
     res.status(500).json({
       success: false,
       error: "Failed to load services",
@@ -314,7 +318,7 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    const cost = calculateCost(service.baseRate, quantity);
+    const cost = calculateCost(service.rate, quantity);
 
     const user = await User.findById(req.user.id);
 
@@ -366,35 +370,10 @@ app.get("/api/orders", auth, async (req, res) => {
   }
 });
 
-// ================= ADMIN =================
-app.post("/api/admin/approve", auth, async (req, res) => {
-  try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
-
-    const d = await Deposit.findById(req.body.id);
-    if (!d) return res.status(404).json({ error: "Not found" });
-
-    const user = await User.findById(d.userId);
-
-    user.balance += d.amount;
-    await user.save();
-
-    d.status = "approved";
-    await d.save();
-
-    res.json({ message: "Approved" });
-
-  } catch {
-    res.status(500).json({ error: "Approval failed" });
-  }
-});
-
-// ================= START SERVER =================
+// ================= START =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  log(`Server running on port ${PORT}`);
+  console.log("🚀 Server running on", PORT);
+  log("Server running");
 });
