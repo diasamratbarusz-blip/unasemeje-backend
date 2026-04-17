@@ -21,7 +21,13 @@ const Service = require("./models/Service");
 // UTILS
 const smmRequest = require("./utils/smmApi");
 
-// ================= CONFIG =================
+// ================= VALIDATE ENV =================
+if (!process.env.JWT_SECRET) {
+  console.error("❌ JWT_SECRET missing");
+  process.exit(1);
+}
+
+// ================= INIT =================
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -29,18 +35,18 @@ app.use(express.json());
 connectDB();
 log("Server starting...");
 
-// ================= CURRENCY =================
+// ================= CONFIG =================
 const USD_TO_KSH = 160;
+const CACHE_TIME = 10 * 60 * 1000; // 10 mins
+let lastFetch = 0;
 
 // ================= AUTH =================
 function auth(req, res, next) {
   try {
-    const header = req.headers.authorization;
-    if (!header) return res.status(401).json({ error: "No token" });
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) return res.status(401).json({ error: "No token" });
 
-    const token = header.split(" ")[1];
     req.user = jwt.verify(token, process.env.JWT_SECRET);
-
     next();
   } catch {
     return res.status(401).json({ error: "Invalid token" });
@@ -51,6 +57,7 @@ function auth(req, res, next) {
 function cleanName(name = "") {
   return String(name)
     .replace(/\[.*?\]/g, "")
+    .replace(/^TT.*?\s/i, "")
     .trim();
 }
 
@@ -66,11 +73,11 @@ function detectPlatform(cat = "") {
   return "Other";
 }
 
-// ================= SMART CURRENCY =================
+// ================= CURRENCY =================
 function detectCurrency(rate) {
   rate = Number(rate);
 
-  // If too small → USD
+  // USD usually small values (0.1 - 5)
   if (rate > 0 && rate < 5) return "USD";
 
   return "KES";
@@ -78,33 +85,27 @@ function detectCurrency(rate) {
 
 function toKsh(rate) {
   const currency = detectCurrency(rate);
-
-  if (currency === "USD") {
-    return rate * USD_TO_KSH;
-  }
-
-  return rate;
+  return currency === "USD" ? rate * USD_TO_KSH : rate;
 }
 
-// ================= YOUR CUSTOM MARKUP =================
+// ================= MARKUP =================
 function applyMarkup(rate) {
   rate = Number(rate);
 
   if (rate < 10) return rate + 30;
-  if (rate >= 10 && rate < 20) return rate + 30;
-  if (rate >= 20 && rate < 30) return rate + 20;
-  if (rate >= 30 && rate < 40) return rate + 16;
-  if (rate >= 40 && rate < 50) return rate + 12;
-  if (rate >= 50 && rate < 60) return rate + 12;
-  if (rate >= 60 && rate < 70) return rate + 12;
-  if (rate >= 70 && rate < 100) return rate + 15;
+  if (rate < 20) return rate + 30;
+  if (rate < 30) return rate + 20;
+  if (rate < 40) return rate + 16;
+  if (rate < 50) return rate + 12;
+  if (rate < 70) return rate + 12;
+  if (rate < 100) return rate + 15;
 
   return rate + 30;
 }
 
 // ================= COST =================
-function calculateCost(sellingRate, qty) {
-  return (sellingRate / 1000) * qty;
+function calculateCost(rate, qty) {
+  return (rate / 1000) * qty; // ⚠️ FIXED: DO NOT APPLY MARKUP AGAIN
 }
 
 // ================= ROOT =================
@@ -117,6 +118,9 @@ app.post("/api/register", async (req, res) => {
   try {
     const { email, password, phone } = req.body;
 
+    if (!email || !password)
+      return res.status(400).json({ error: "Missing fields" });
+
     const exists = await User.findOne({ email });
     if (exists) return res.status(400).json({ error: "User exists" });
 
@@ -124,23 +128,26 @@ app.post("/api/register", async (req, res) => {
 
     res.json({ message: "Registered" });
   } catch {
-    res.status(500).json({ error: "Error" });
+    res.status(500).json({ error: "Server error" });
   }
 });
 
 app.post("/api/login", async (req, res) => {
   try {
-    const user = await User.findOne(req.body);
+    const { email, password } = req.body;
+
+    const user = await User.findOne({ email, password });
     if (!user) return res.status(400).json({ error: "Invalid login" });
 
     const token = jwt.sign(
       { id: user._id, email: user.email },
-      process.env.JWT_SECRET
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
     );
 
     res.json({ token });
   } catch {
-    res.status(500).json({ error: "Error" });
+    res.status(500).json({ error: "Server error" });
   }
 });
 
@@ -149,13 +156,64 @@ app.get("/api/me", auth, async (req, res) => {
   res.json(user);
 });
 
+// ================= MPESA =================
+async function getMpesaToken() {
+  const auth = Buffer.from(
+    process.env.MPESA_CONSUMER_KEY + ":" + process.env.MPESA_CONSUMER_SECRET
+  ).toString("base64");
+
+  const res = await axios.get(
+    "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
+    { headers: { Authorization: "Basic " + auth } }
+  );
+
+  return res.data.access_token;
+}
+
+app.post("/api/mpesa/stk", auth, async (req, res) => {
+  try {
+    const { phone, amount } = req.body;
+
+    const token = await getMpesaToken();
+
+    await axios.post(
+      "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
+      {
+        BusinessShortCode: process.env.MPESA_SHORTCODE,
+        Amount: amount,
+        PartyA: phone,
+        PartyB: process.env.MPESA_SHORTCODE,
+        PhoneNumber: phone,
+        CallBackURL: process.env.CALLBACK_URL,
+        AccountReference: "SMM PANEL",
+        TransactionDesc: "Deposit"
+      },
+      { headers: { Authorization: "Bearer " + token } }
+    );
+
+    await Deposit.create({
+      userId: req.user.id,
+      phone,
+      amount,
+      status: "pending"
+    });
+
+    res.json({ message: "STK sent" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "STK failed" });
+  }
+});
+
 // ================= SERVICES =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
+    const now = Date.now();
 
-    if (!services.length) {
-      console.log("Fetching from provider...");
+    if (!services.length || now - lastFetch > CACHE_TIME) {
+      console.log("⚡ Fetching services...");
 
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url);
@@ -166,29 +224,34 @@ app.get("/api/services", async (req, res) => {
 
       const formatted = list.map(s => {
         const rawRate = Number(s.rate || 0);
-
         const kshRate = toKsh(rawRate);
         const selling = applyMarkup(kshRate);
 
         return {
-          serviceId: String(s.service),
-          name: cleanName(s.name),
+          serviceId: String(s.service || s.id),
+          name: cleanName(s.name || "Service"),
+
           rate: kshRate,
           sellingRate: selling,
-          min: s.min || 1,
-          max: s.max || 100000,
-          category: s.category || "Other",
-          platform: detectPlatform(s.category)
+
+          min: Number(s.min || 1),
+          max: Number(s.max || 100000),
+
+          category: s.category || "",
+          platform: detectPlatform(s.category || "")
         };
       });
 
+      await Service.deleteMany({});
       await Service.insertMany(formatted);
+
       services = formatted;
+      lastFetch = now;
     }
 
     const grouped = {};
 
-    services.forEach(s => {
+    services.slice(0, 300).forEach(s => {
       if (!grouped[s.platform]) grouped[s.platform] = [];
 
       grouped[s.platform].push({
@@ -196,7 +259,8 @@ app.get("/api/services", async (req, res) => {
         name: s.name,
         rate: s.sellingRate.toFixed(2),
         min: s.min,
-        max: s.max
+        max: s.max,
+        category: s.category
       });
     });
 
@@ -204,7 +268,7 @@ app.get("/api/services", async (req, res) => {
 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed services" });
+    res.status(500).json({ error: "Failed to load services" });
   }
 });
 
@@ -220,9 +284,8 @@ app.post("/api/order", auth, async (req, res) => {
 
     const user = await User.findById(req.user.id);
 
-    if (user.balance < cost) {
+    if (user.balance < cost)
       return res.status(400).json({ error: "Insufficient balance" });
-    }
 
     const smm = await smmRequest({
       action: "add",
@@ -231,9 +294,8 @@ app.post("/api/order", auth, async (req, res) => {
       quantity
     });
 
-    if (!smm?.order) {
+    if (!smm?.order)
       return res.status(500).json({ error: "Provider failed" });
-    }
 
     user.balance -= cost;
     await user.save();
@@ -241,9 +303,10 @@ app.post("/api/order", auth, async (req, res) => {
     const order = await Order.create({
       userId: user._id,
       service: service.name,
+      link,
       quantity,
-      cost,
-      smmOrderId: smm.order
+      smmOrderId: smm.order,
+      cost
     });
 
     res.json({ message: "Order placed", order });
@@ -263,5 +326,6 @@ app.get("/api/orders", auth, async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("🚀 Running on", PORT);
+  console.log("🚀 Server running on", PORT);
+  log("Server running");
 });
