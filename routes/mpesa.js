@@ -6,45 +6,127 @@ const { stkPush } = require("../utils/mpesa");
 
 const router = express.Router();
 
-// STK
+/* =========================
+   STK PUSH (INITIATE PAYMENT)
+========================= */
 router.post("/stk", auth, async (req, res) => {
-  const { phone, amount } = req.body;
+  try {
+    const { phone, amount } = req.body;
 
-  await stkPush(phone, amount);
+    if (!phone || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: "Phone and amount required"
+      });
+    }
 
-  await Deposit.create({
-    userId: req.user.id,
-    phone,
-    amount
-  });
+    // Send STK
+    const response = await stkPush(phone, amount);
 
-  res.json({ message: "STK sent" });
+    // Save pending deposit
+    await Deposit.create({
+      userId: req.user.id,
+      phone,
+      amount,
+      status: "pending"
+    });
+
+    res.json({
+      success: true,
+      message: "STK push sent",
+      data: response
+    });
+
+  } catch (err) {
+    console.error("STK ERROR:", err.message);
+
+    res.status(500).json({
+      success: false,
+      error: "STK push failed"
+    });
+  }
 });
 
-// CALLBACK
+/* =========================
+   CALLBACK (M-PESA RESPONSE)
+========================= */
 router.post("/callback", async (req, res) => {
-  const result = req.body.Body.stkCallback;
+  try {
+    const callback = req.body?.Body?.stkCallback;
 
-  if (result.ResultCode === 0) {
-    const items = result.CallbackMetadata.Item;
+    if (!callback) {
+      return res.sendStatus(200);
+    }
 
-    const amount = items.find(i => i.Name === "Amount").Value;
-    const phone = items.find(i => i.Name === "PhoneNumber").Value;
+    const resultCode = callback.ResultCode;
 
-    const user = await User.findOne({ phone });
+    // ================= SUCCESS PAYMENT =================
+    if (resultCode === 0) {
+      const metadata = callback.CallbackMetadata?.Item || [];
 
-    if (user) {
-      user.balance += amount;
-      await user.save();
+      const amountObj = metadata.find(i => i.Name === "Amount");
+      const phoneObj = metadata.find(i => i.Name === "PhoneNumber");
+      const receiptObj = metadata.find(i => i.Name === "MpesaReceiptNumber");
+
+      const amount = amountObj?.Value;
+      const phone = phoneObj?.Value;
+      const receipt = receiptObj?.Value;
+
+      if (!phone || !amount) {
+        return res.sendStatus(200);
+      }
+
+      // ================= FIND USER =================
+      const user = await User.findOne({ phone });
+
+      if (user) {
+        // avoid double credit
+        const existing = await Deposit.findOne({
+          transactionCode: receipt
+        });
+
+        if (!existing) {
+          // update balance
+          user.balance += Number(amount);
+          await user.save();
+
+          // update deposit
+          await Deposit.findOneAndUpdate(
+            {
+              phone,
+              amount,
+              status: "pending"
+            },
+            {
+              status: "completed",
+              transactionCode: receipt,
+              proof: JSON.stringify(callback)
+            }
+          );
+
+          console.log("✅ Deposit credited:", phone, amount);
+        }
+      }
+
+    } else {
+      // ================= FAILED PAYMENT =================
+      console.log("❌ STK Failed:", callback.ResultDesc);
 
       await Deposit.findOneAndUpdate(
-        { phone, amount, status: "pending" },
-        { status: "completed" }
+        { status: "pending" },
+        {
+          status: "failed",
+          proof: JSON.stringify(callback)
+        }
       );
     }
-  }
 
-  res.sendStatus(200);
+    res.sendStatus(200);
+
+  } catch (err) {
+    console.error("CALLBACK ERROR:", err.message);
+    res.sendStatus(200); // MUST always respond 200 to Safaricom
+  }
 });
 
 module.exports = router;
