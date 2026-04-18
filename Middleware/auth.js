@@ -1,16 +1,50 @@
+// ================= IMPORTS =================
 const jwt = require("jsonwebtoken");
 
-module.exports = function (req, res, next) {
+// ================= AUTH MIDDLEWARE =================
+module.exports = function auth(req, res, next) {
   try {
-    const header = req.headers["authorization"];
-    if (!header) return res.status(401).json({ error: "No token" });
+    const authHeader = req.headers.authorization;
 
-    const token = header.split(" ")[1];
+    // ================= CHECK HEADER =================
+    if (!authHeader) {
+      return res.status(401).json({
+        success: false,
+        error: "Authorization header missing"
+      });
+    }
+
+    // ================= EXTRACT TOKEN =================
+    const token = authHeader.split(" ")[1];
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: "Token missing"
+      });
+    }
+
+    // ================= VERIFY TOKEN =================
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+    if (!decoded) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid token payload"
+      });
+    }
+
+    // ================= ATTACH USER =================
     req.user = decoded;
+
     next();
-  } catch {
-    res.status(401).json({ error: "Invalid token" });
+
+  } catch (err) {
+    console.error("AUTH ERROR:", err.message);
+
+    return res.status(401).json({
+      success: false,
+      error: "Invalid or expired token"
+    });
   }
 };
