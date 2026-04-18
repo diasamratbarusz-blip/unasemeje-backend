@@ -3,20 +3,16 @@ const router = express.Router();
 const axios = require("axios");
 const Service = require("../../models/Service");
 
-/**
- * =========================================
- * CONFIG SAFETY CHECK
- * =========================================
- */
+/* =========================
+   ENV CHECK SAFETY
+========================= */
 if (!process.env.SMM_API_URL || !process.env.SMM_API_KEY) {
-  console.error("❌ Missing SMM_API_URL or SMM_API_KEY in environment variables");
+  console.error("❌ Missing SMM_API_URL or SMM_API_KEY");
 }
 
-/**
- * =========================================
- * FETCH FROM PROVIDER (FIXED)
- * =========================================
- */
+/* =========================
+   FETCH FROM PROVIDER
+========================= */
 const fetchProviderServices = async () => {
   try {
     const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
@@ -31,39 +27,38 @@ const fetchProviderServices = async () => {
       throw new Error("Empty provider response");
     }
 
-    // SAFE NORMALIZATION (ARRAY OR OBJECT)
-    let servicesArray = [];
+    let services = [];
 
     if (Array.isArray(raw)) {
-      servicesArray = raw;
-    } else {
-      servicesArray = Object.values(raw);
+      services = raw;
+    } else if (typeof raw === "object") {
+      services = Object.values(raw).flat();
     }
 
-    return servicesArray.map((s) => ({
-      serviceId: s.service,
-      name: s.name,
-      rate: Number(s.rate),
-      min: Number(s.min),
-      max: Number(s.max),
+    return services.map((s) => ({
+      serviceId: String(s.service || s.id),
+      name: s.name || "Unnamed Service",
+      rate: Number(s.rate || s.cost || 0),
+      min: Number(s.min || 1),
+      max: Number(s.max || 100000),
       category: s.category || "Other",
       status: "active"
     }));
 
   } catch (err) {
-    console.error("❌ PROVIDER FETCH ERROR:", err.message);
+    console.error("❌ Provider fetch error:", err.message);
     throw err;
   }
 };
 
-/**
- * =========================================
- * UPSERT SERVICES INTO DB
- * =========================================
- */
+/* =========================
+   SAVE TO DATABASE (UPSERT)
+========================= */
 const syncServicesToDB = async (services) => {
   try {
-    const bulkOps = services.map((s) => ({
+    if (!services || !services.length) return;
+
+    const ops = services.map((s) => ({
       updateOne: {
         filter: { serviceId: s.serviceId },
         update: { $set: s },
@@ -71,26 +66,55 @@ const syncServicesToDB = async (services) => {
       }
     }));
 
-    await Service.bulkWrite(bulkOps);
+    await Service.bulkWrite(ops);
+
   } catch (err) {
-    console.error("❌ DB SYNC ERROR:", err.message);
+    console.error("❌ DB sync error:", err.message);
   }
 };
 
-/**
- * =========================================
- * GET FLAT SERVICES (FRONTEND SAFE)
- * =========================================
- * /api/services/all
- */
+/* =========================
+   PLATFORM DETECTION
+========================= */
+function detectPlatform(text = "", category = "") {
+  text = (text + " " + category).toLowerCase();
+
+  if (text.includes("instagram")) return "Instagram";
+  if (text.includes("tiktok")) return "TikTok";
+  if (text.includes("youtube")) return "YouTube";
+  if (text.includes("facebook")) return "Facebook";
+  if (text.includes("twitter") || text.includes("x")) return "Twitter/X";
+
+  return "Other";
+}
+
+/* =========================
+   TYPE DETECTION
+========================= */
+function detectType(name = "") {
+  name = name.toLowerCase();
+
+  if (name.includes("followers")) return "Followers";
+  if (name.includes("likes")) return "Likes";
+  if (name.includes("views")) return "Views";
+  if (name.includes("comments")) return "Comments";
+  if (name.includes("subscribers")) return "Subscribers";
+
+  return "Other";
+}
+
+/* =========================
+   GET FLAT SERVICES
+   /api/services/all
+========================= */
 router.get("/all", async (req, res) => {
   try {
     let services = await Service.find({ status: "active" });
 
     if (!services.length) {
-      const providerServices = await fetchProviderServices();
-      await syncServicesToDB(providerServices);
-      services = providerServices;
+      const provider = await fetchProviderServices();
+      await syncServicesToDB(provider);
+      services = provider;
     }
 
     res.json({
@@ -103,48 +127,30 @@ router.get("/all", async (req, res) => {
 
     res.status(500).json({
       success: false,
-      error: "Failed to load services",
-      details: err.message
+      error: "Failed to load services"
     });
   }
 });
 
-/**
- * =========================================
- * GET GROUPED SERVICES (DASHBOARD)
- * =========================================
- * /api/services
- */
+/* =========================
+   GET GROUPED SERVICES
+   /api/services
+========================= */
 router.get("/", async (req, res) => {
   try {
     let services = await Service.find({ status: "active" });
 
     if (!services.length) {
-      const providerServices = await fetchProviderServices();
-      await syncServicesToDB(providerServices);
-      services = providerServices;
+      const provider = await fetchProviderServices();
+      await syncServicesToDB(provider);
+      services = provider;
     }
 
     const grouped = {};
 
     services.forEach((s) => {
-      const category = (s.category || "").toLowerCase();
-      const name = (s.name || "").toLowerCase();
-
-      // PLATFORM DETECTION
-      let platform = "Other";
-      if (category.includes("instagram")) platform = "Instagram";
-      else if (category.includes("tiktok")) platform = "TikTok";
-      else if (category.includes("facebook")) platform = "Facebook";
-      else if (category.includes("youtube")) platform = "YouTube";
-      else if (category.includes("twitter") || category.includes("x")) platform = "Twitter/X";
-
-      // TYPE DETECTION
-      let type = "Other";
-      if (name.includes("followers")) type = "Followers";
-      else if (name.includes("likes")) type = "Likes";
-      else if (name.includes("views")) type = "Views";
-      else if (name.includes("comments")) type = "Comments";
+      const platform = detectPlatform(s.name, s.category);
+      const type = detectType(s.name);
 
       if (!grouped[platform]) grouped[platform] = {};
       if (!grouped[platform][type]) grouped[platform][type] = [];
@@ -152,7 +158,7 @@ router.get("/", async (req, res) => {
       grouped[platform][type].push({
         serviceId: s.serviceId,
         name: s.name,
-        rate: s.rate,
+        rate: Number(s.rate).toFixed(2),
         min: s.min,
         max: s.max,
         category: s.category
@@ -169,17 +175,14 @@ router.get("/", async (req, res) => {
 
     res.status(500).json({
       success: false,
-      error: "Failed to load services",
-      details: err.message
+      error: "Failed to load services"
     });
   }
 });
 
-/**
- * =========================================
- * GET SINGLE SERVICE
- * =========================================
- */
+/* =========================
+   SINGLE SERVICE
+========================= */
 router.get("/:serviceId", async (req, res) => {
   try {
     const service = await Service.findOne({
@@ -204,8 +207,7 @@ router.get("/:serviceId", async (req, res) => {
 
     res.status(500).json({
       success: false,
-      error: "Failed to fetch service",
-      details: err.message
+      error: "Failed to fetch service"
     });
   }
 });
