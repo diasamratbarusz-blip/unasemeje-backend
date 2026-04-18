@@ -21,7 +21,7 @@ const Service = require("./models/Service");
 // UTILS
 const smmRequest = require("./utils/smmApi");
 
-// ================= VALIDATE ENV =================
+// ================= VALIDATE =================
 if (!process.env.JWT_SECRET) {
   console.error("❌ JWT_SECRET missing");
   process.exit(1);
@@ -37,7 +37,7 @@ log("Server starting...");
 
 // ================= CONFIG =================
 const USD_TO_KSH = 160;
-const CACHE_TIME = 5 * 60 * 1000; // 5 min faster refresh
+const CACHE_TIME = 5 * 60 * 1000;
 let lastFetch = 0;
 
 // ================= AUTH =================
@@ -73,33 +73,29 @@ function detectPlatform(cat = "") {
   return "Other";
 }
 
-// ================= FIXED CURRENCY DETECTION =================
-function detectCurrency(value, text = "") {
+// ================= SMART CURRENCY DETECTION =================
+function detectCurrency(rate, text = "") {
   text = String(text).toLowerCase();
 
   if (text.includes("usd")) return "USD";
   if (text.includes("ksh") || text.includes("kes")) return "KES";
 
-  value = Number(value);
+  rate = Number(rate);
 
-  // better detection (provider typical behavior)
-  if (value > 0 && value < 5) return "USD";
+  // realistic provider behavior
+  if (rate > 0 && rate < 5) return "USD";
 
   return "KES";
 }
 
-// ================= CONVERT TO KSH =================
+// ================= CONVERT =================
 function toKsh(rate, currency) {
   rate = Number(rate);
-
-  if (currency === "USD") {
-    return rate * USD_TO_KSH;
-  }
-
+  if (currency === "USD") return rate * USD_TO_KSH;
   return rate;
 }
 
-// ================= MARKUP SYSTEM =================
+// ================= MARKUP =================
 function applyMarkup(rate) {
   rate = Number(rate);
 
@@ -108,16 +104,15 @@ function applyMarkup(rate) {
   if (rate < 30) return rate + 20;
   if (rate < 40) return rate + 16;
   if (rate < 50) return rate + 12;
-  if (rate < 60) return rate + 12;
   if (rate < 70) return rate + 12;
   if (rate < 100) return rate + 15;
 
   return rate + 30;
 }
 
-// ================= COST (FIXED - NO DOUBLE MARKUP) =================
+// ================= COST =================
 function calculateCost(rate, qty) {
-  return (Number(rate) / 1000) * qty;
+  return (Number(rate) / 1000) * Number(qty);
 }
 
 // ================= ROOT =================
@@ -129,9 +124,6 @@ app.get("/", (req, res) => {
 app.post("/api/register", async (req, res) => {
   try {
     const { email, password, phone } = req.body;
-
-    if (!email || !password)
-      return res.status(400).json({ error: "Missing fields" });
 
     const exists = await User.findOne({ email });
     if (exists) return res.status(400).json({ error: "User exists" });
@@ -182,7 +174,6 @@ async function getMpesaToken() {
   return res.data.access_token;
 }
 
-// ================= MPESA STK =================
 app.post("/api/mpesa/stk", auth, async (req, res) => {
   try {
     const { phone, amount } = req.body;
@@ -219,7 +210,7 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
   }
 });
 
-// ================= SERVICES (FIXED + FAST + CLEAN) =================
+// ================= SERVICES (FINAL FIXED LOGIC) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
@@ -235,31 +226,33 @@ app.get("/api/services", async (req, res) => {
         ? response.data
         : Object.values(response.data);
 
-      const formatted = list.map(s => {
-        const rawRate = Number(s.rate || s.cost || 0);
+      const formatted = list
+        .map(s => {
+          const rawRate = Number(s.rate || s.cost || s.price || 0);
 
-        const currency = detectCurrency(rawRate, s.name);
-        const kshRate = toKsh(rawRate, currency);
+          const currency = detectCurrency(rawRate, s.name);
+          const kshRate = toKsh(rawRate, currency);
 
-        const selling = applyMarkup(kshRate);
+          const sellingRate = applyMarkup(kshRate);
 
-        return {
-          serviceId: String(s.service || s.id || ""),
-          name: cleanName(s.name || "Service"),
+          return {
+            serviceId: String(s.service || s.id || ""),
+            name: cleanName(s.name || "Service"),
 
-          providerRate: rawRate,
-          currency,
+            providerRate: rawRate,
+            currency,
 
-          rate: kshRate,
-          sellingRate: selling,
+            rate: kshRate,
+            sellingRate,
 
-          min: Number(s.min || 1),
-          max: Number(s.max || 100000),
+            min: Number(s.min || 1),
+            max: Number(s.max || 100000),
 
-          category: s.category || "Other",
-          platform: detectPlatform(s.category || "")
-        };
-      }).filter(s => s.serviceId && s.name);
+            category: s.category || "Other",
+            platform: detectPlatform(s.category || "")
+          };
+        })
+        .filter(s => s.serviceId && s.name);
 
       await Service.deleteMany({});
       await Service.insertMany(formatted);
@@ -285,7 +278,7 @@ app.get("/api/services", async (req, res) => {
     res.json({ success: true, data: grouped });
 
   } catch (err) {
-    console.error(err);
+    console.error("SERVICES ERROR:", err.message);
     res.status(500).json({ error: "Failed to load services" });
   }
 });
@@ -329,7 +322,8 @@ app.post("/api/order", auth, async (req, res) => {
 
     res.json({ message: "Order placed", order });
 
-  } catch {
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Order failed" });
   }
 });
