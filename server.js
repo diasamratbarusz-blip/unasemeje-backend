@@ -1,4 +1,3 @@
-// ================= IMPORTS =================
 require("dotenv").config();
 
 const express = require("express");
@@ -11,21 +10,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ================= DB =================
+/* ================= DB ================= */
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ DB connected"))
   .catch(err => console.log("DB error:", err));
 
-// ================= MODELS =================
+/* ================= MODELS ================= */
 const User = require("./models/User");
 const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
-// ================= CONFIG =================
+/* ================= CONFIG ================= */
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 
-// ================= AUTH =================
+/* ================= AUTH ================= */
 function auth(req, res, next) {
   try {
     const token = req.headers.authorization?.split(" ")[1];
@@ -38,7 +37,7 @@ function auth(req, res, next) {
   }
 }
 
-// ================= ADMIN =================
+/* ================= ADMIN ================= */
 function adminOnly(req, res, next) {
   if (req.user.email !== ADMIN_EMAIL) {
     return res.status(403).json({ error: "Admin only" });
@@ -46,7 +45,7 @@ function adminOnly(req, res, next) {
   next();
 }
 
-// ================= HELPERS =================
+/* ================= HELPERS ================= */
 function cleanName(name = "") {
   return String(name)
     .replace(/\[.*?\]/g, "")
@@ -54,7 +53,7 @@ function cleanName(name = "") {
     .trim();
 }
 
-// ================= PLATFORM DETECTION (SMART + PRICE) =================
+/* ================= PLATFORM DETECTION ================= */
 function detectPlatform(service = {}) {
   const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
   const rate = Number(service.rate || 0);
@@ -64,7 +63,6 @@ function detectPlatform(service = {}) {
   if (text.includes("youtube") || text.includes("yt")) return "YouTube";
   if (text.includes("facebook") || text.includes("fb")) return "Facebook";
 
-  // PRICE BASED FALLBACK
   if (rate > 0 && rate < 5) return "TikTok";
   if (rate >= 5 && rate < 20) return "Instagram";
   if (rate >= 20 && rate < 60) return "YouTube";
@@ -72,17 +70,17 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ================= COST =================
+/* ================= COST ================= */
 function calculateCost(rate, qty) {
   return (Number(rate) / 1000) * Number(qty);
 }
 
-// ================= ROOT =================
+/* ================= ROOT ================= */
 app.get("/", (req, res) => {
   res.send("🚀 SMM Backend Running");
 });
 
-// ================= AUTH =================
+/* ================= AUTH ================= */
 app.post("/api/register", async (req, res) => {
   const { email, password, phone } = req.body;
 
@@ -114,7 +112,7 @@ app.get("/api/me", auth, async (req, res) => {
   res.json(user);
 });
 
-// ================= MPESA MESSAGE DEPOSIT =================
+/* ================= M-PESA PARSER (IMPROVED) ================= */
 function extractMpesa(message) {
   const code = message.match(/[A-Z0-9]{8,12}/)?.[0];
   const amount = message.match(/Ksh\s?([\d,]+)/i)?.[1];
@@ -127,58 +125,75 @@ function extractMpesa(message) {
   };
 }
 
+/* ================= DEPOSIT SUBMIT (FIXED) ================= */
 app.post("/api/deposit", auth, async (req, res) => {
-  const { message } = req.body;
+  try {
+    const { message } = req.body;
 
-  const data = extractMpesa(message);
+    const data = extractMpesa(message);
 
-  if (!data.code) {
-    return res.json({ error: "Invalid M-Pesa message" });
+    if (!data.code || !data.amount) {
+      return res.status(400).json({ error: "Invalid M-Pesa message" });
+    }
+
+    // prevent duplicates
+    const exists = await Deposit.findOne({ transactionCode: data.code });
+    if (exists) {
+      return res.status(400).json({ error: "Transaction already used" });
+    }
+
+    await Deposit.create({
+      userId: req.user.id,
+      phone: data.phone,
+      amount: data.amount,
+      transactionCode: data.code,
+      message,            // FIXED FIELD NAME (consistent)
+      status: "pending",
+      source: "manual"
+    });
+
+    res.json({ message: "Deposit submitted for approval" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Deposit failed" });
   }
-
-  const exists = await Deposit.findOne({ transactionCode: data.code });
-  if (exists) {
-    return res.json({ error: "Transaction already used" });
-  }
-
-  await Deposit.create({
-    userId: req.user.id,
-    phone: data.phone,
-    amount: data.amount,
-    transactionCode: data.code,
-    proof: message,
-    status: "pending"
-  });
-
-  res.json({ message: "Deposit submitted for approval" });
 });
 
-// ================= ADMIN DEPOSITS =================
+/* ================= ADMIN DEPOSITS ================= */
 app.get("/api/admin/deposits", auth, adminOnly, async (req, res) => {
   const deposits = await Deposit.find().sort({ createdAt: -1 });
   res.json(deposits);
 });
 
-// ================= ADMIN APPROVE =================
+/* ================= ADMIN APPROVE ================= */
 app.post("/api/admin/approve", auth, adminOnly, async (req, res) => {
-  const { id } = req.body;
+  try {
+    const { id } = req.body;
 
-  const dep = await Deposit.findById(id);
-  if (!dep || dep.status === "approved") {
-    return res.json({ error: "Invalid request" });
+    const dep = await Deposit.findById(id);
+    if (!dep || dep.status === "approved") {
+      return res.status(400).json({ error: "Invalid deposit" });
+    }
+
+    const user = await User.findById(dep.userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    user.balance += dep.amount;
+    await user.save();
+
+    dep.status = "approved";
+    dep.approvedAt = new Date();
+    await dep.save();
+
+    res.json({ message: "Deposit approved" });
+
+  } catch (err) {
+    res.status(500).json({ error: "Approval failed" });
   }
-
-  const user = await User.findById(dep.userId);
-  user.balance += dep.amount;
-  await user.save();
-
-  dep.status = "approved";
-  await dep.save();
-
-  res.json({ message: "Deposit approved" });
 });
 
-// ================= SERVICES (GROUPED + PRICE DETECT) =================
+/* ================= SERVICES ================= */
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
@@ -223,11 +238,12 @@ app.get("/api/services", async (req, res) => {
     res.json({ data: grouped });
 
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Services failed" });
   }
 });
 
-// ================= ORDER =================
+/* ================= ORDER ================= */
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -239,35 +255,40 @@ app.post("/api/order", auth, async (req, res) => {
 
     const user = await User.findById(req.user.id);
 
-    if (user.balance < cost)
+    if (user.balance < cost) {
       return res.status(400).json({ error: "Insufficient balance" });
+    }
 
     user.balance -= cost;
     await user.save();
 
     const order = await Order.create({
       userId: user._id,
-      service: service.name,
+      serviceId,
+      serviceName: service.name,
       link,
       quantity,
-      cost
+      cost,
+      rate: service.rate
     });
 
     res.json({ message: "Order placed", order });
 
-  } catch {
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Order failed" });
   }
 });
 
-// ================= ORDERS =================
+/* ================= ORDERS ================= */
 app.get("/api/orders", auth, async (req, res) => {
   const orders = await Order.find({ userId: req.user.id });
   res.json(orders);
 });
 
-// ================= START =================
+/* ================= START ================= */
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log("🚀 Server running on", PORT);
 });
