@@ -61,19 +61,32 @@ function cleanName(name = "") {
     .trim();
 }
 
-function detectPlatform(cat = "") {
-  cat = String(cat).toLowerCase();
+// ================= SMART PLATFORM DETECTION =================
+function detectPlatform(service = {}) {
+  const text = `
+    ${service.name || ""}
+    ${service.category || ""}
+  `.toLowerCase();
 
-  if (cat.includes("instagram")) return "Instagram";
-  if (cat.includes("tiktok")) return "TikTok";
-  if (cat.includes("youtube")) return "YouTube";
-  if (cat.includes("facebook")) return "Facebook";
-  if (cat.includes("twitter") || cat.includes("x")) return "Twitter/X";
+  const rate = Number(service.rate || service.cost || 0);
+
+  // TEXT BASED (MOST ACCURATE)
+  if (text.includes("instagram") || text.includes("ig")) return "Instagram";
+  if (text.includes("tiktok") || text.includes("tt")) return "TikTok";
+  if (text.includes("youtube") || text.includes("yt")) return "YouTube";
+  if (text.includes("facebook") || text.includes("fb")) return "Facebook";
+  if (text.includes("twitter") || text.includes("x")) return "Twitter/X";
+
+  // PRICE FALLBACK (SECONDARY SIGNAL)
+  if (rate > 0 && rate < 5) return "TikTok/Instagram";
+  if (rate >= 5 && rate < 20) return "Instagram";
+  if (rate >= 20 && rate < 60) return "YouTube";
+  if (rate >= 60) return "Facebook/Other";
 
   return "Other";
 }
 
-// ================= SMART CURRENCY DETECTION =================
+// ================= CURRENCY DETECTION =================
 function detectCurrency(rate, text = "") {
   text = String(text).toLowerCase();
 
@@ -82,7 +95,6 @@ function detectCurrency(rate, text = "") {
 
   rate = Number(rate);
 
-  // realistic provider behavior
   if (rate > 0 && rate < 5) return "USD";
 
   return "KES";
@@ -91,8 +103,7 @@ function detectCurrency(rate, text = "") {
 // ================= CONVERT =================
 function toKsh(rate, currency) {
   rate = Number(rate);
-  if (currency === "USD") return rate * USD_TO_KSH;
-  return rate;
+  return currency === "USD" ? rate * USD_TO_KSH : rate;
 }
 
 // ================= MARKUP =================
@@ -110,7 +121,7 @@ function applyMarkup(rate) {
   return rate + 30;
 }
 
-// ================= COST =================
+// ================= COST (FIXED) =================
 function calculateCost(rate, qty) {
   return (Number(rate) / 1000) * Number(qty);
 }
@@ -210,7 +221,7 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
   }
 });
 
-// ================= SERVICES (FINAL FIXED LOGIC) =================
+// ================= SERVICES (CLEAN + GROUPED + FAST) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
@@ -249,7 +260,7 @@ app.get("/api/services", async (req, res) => {
             max: Number(s.max || 100000),
 
             category: s.category || "Other",
-            platform: detectPlatform(s.category || "")
+            platform: detectPlatform(s)
           };
         })
         .filter(s => s.serviceId && s.name);
@@ -261,9 +272,10 @@ app.get("/api/services", async (req, res) => {
       lastFetch = now;
     }
 
+    // ================= GROUP BY PLATFORM =================
     const grouped = {};
 
-    services.slice(0, 300).forEach(s => {
+    services.slice(0, 500).forEach(s => {
       if (!grouped[s.platform]) grouped[s.platform] = [];
 
       grouped[s.platform].push({
@@ -271,7 +283,8 @@ app.get("/api/services", async (req, res) => {
         name: s.name,
         rate: Number(s.sellingRate).toFixed(2),
         min: s.min,
-        max: s.max
+        max: s.max,
+        category: s.category
       });
     });
 
