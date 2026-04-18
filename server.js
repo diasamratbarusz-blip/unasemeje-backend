@@ -37,7 +37,7 @@ log("Server starting...");
 
 // ================= CONFIG =================
 const USD_TO_KSH = 160;
-const CACHE_TIME = 10 * 60 * 1000; // 10 mins
+const CACHE_TIME = 5 * 60 * 1000; // 5 min faster refresh
 let lastFetch = 0;
 
 // ================= AUTH =================
@@ -62,7 +62,7 @@ function cleanName(name = "") {
 }
 
 function detectPlatform(cat = "") {
-  cat = cat.toLowerCase();
+  cat = String(cat).toLowerCase();
 
   if (cat.includes("instagram")) return "Instagram";
   if (cat.includes("tiktok")) return "TikTok";
@@ -73,22 +73,33 @@ function detectPlatform(cat = "") {
   return "Other";
 }
 
-// ================= CURRENCY =================
-function detectCurrency(rate) {
-  rate = Number(rate);
+// ================= FIXED CURRENCY DETECTION =================
+function detectCurrency(value, text = "") {
+  text = String(text).toLowerCase();
 
-  // USD usually small values (0.1 - 5)
-  if (rate > 0 && rate < 5) return "USD";
+  if (text.includes("usd")) return "USD";
+  if (text.includes("ksh") || text.includes("kes")) return "KES";
+
+  value = Number(value);
+
+  // better detection (provider typical behavior)
+  if (value > 0 && value < 5) return "USD";
 
   return "KES";
 }
 
-function toKsh(rate) {
-  const currency = detectCurrency(rate);
-  return currency === "USD" ? rate * USD_TO_KSH : rate;
+// ================= CONVERT TO KSH =================
+function toKsh(rate, currency) {
+  rate = Number(rate);
+
+  if (currency === "USD") {
+    return rate * USD_TO_KSH;
+  }
+
+  return rate;
 }
 
-// ================= MARKUP =================
+// ================= MARKUP SYSTEM =================
 function applyMarkup(rate) {
   rate = Number(rate);
 
@@ -97,15 +108,16 @@ function applyMarkup(rate) {
   if (rate < 30) return rate + 20;
   if (rate < 40) return rate + 16;
   if (rate < 50) return rate + 12;
+  if (rate < 60) return rate + 12;
   if (rate < 70) return rate + 12;
   if (rate < 100) return rate + 15;
 
   return rate + 30;
 }
 
-// ================= COST =================
+// ================= COST (FIXED - NO DOUBLE MARKUP) =================
 function calculateCost(rate, qty) {
-  return (rate / 1000) * qty; // ⚠️ FIXED: DO NOT APPLY MARKUP AGAIN
+  return (Number(rate) / 1000) * qty;
 }
 
 // ================= ROOT =================
@@ -170,6 +182,7 @@ async function getMpesaToken() {
   return res.data.access_token;
 }
 
+// ================= MPESA STK =================
 app.post("/api/mpesa/stk", auth, async (req, res) => {
   try {
     const { phone, amount } = req.body;
@@ -206,30 +219,36 @@ app.post("/api/mpesa/stk", auth, async (req, res) => {
   }
 });
 
-// ================= SERVICES =================
+// ================= SERVICES (FIXED + FAST + CLEAN) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
     const now = Date.now();
 
     if (!services.length || now - lastFetch > CACHE_TIME) {
-      console.log("⚡ Fetching services...");
+      console.log("⚡ Fetching provider services...");
 
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
-      const response = await axios.get(url);
+      const response = await axios.get(url, { timeout: 20000 });
 
       const list = Array.isArray(response.data)
         ? response.data
         : Object.values(response.data);
 
       const formatted = list.map(s => {
-        const rawRate = Number(s.rate || 0);
-        const kshRate = toKsh(rawRate);
+        const rawRate = Number(s.rate || s.cost || 0);
+
+        const currency = detectCurrency(rawRate, s.name);
+        const kshRate = toKsh(rawRate, currency);
+
         const selling = applyMarkup(kshRate);
 
         return {
-          serviceId: String(s.service || s.id),
+          serviceId: String(s.service || s.id || ""),
           name: cleanName(s.name || "Service"),
+
+          providerRate: rawRate,
+          currency,
 
           rate: kshRate,
           sellingRate: selling,
@@ -237,10 +256,10 @@ app.get("/api/services", async (req, res) => {
           min: Number(s.min || 1),
           max: Number(s.max || 100000),
 
-          category: s.category || "",
+          category: s.category || "Other",
           platform: detectPlatform(s.category || "")
         };
-      });
+      }).filter(s => s.serviceId && s.name);
 
       await Service.deleteMany({});
       await Service.insertMany(formatted);
@@ -257,10 +276,9 @@ app.get("/api/services", async (req, res) => {
       grouped[s.platform].push({
         serviceId: s.serviceId,
         name: s.name,
-        rate: s.sellingRate.toFixed(2),
+        rate: Number(s.sellingRate).toFixed(2),
         min: s.min,
-        max: s.max,
-        category: s.category
+        max: s.max
       });
     });
 
