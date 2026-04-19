@@ -23,7 +23,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ================= CONNECT DB =================
+// ================= DB =================
 connectDB();
 log("Server starting...");
 
@@ -46,29 +46,60 @@ function auth(req, res, next) {
 function cleanName(name = "") {
   return String(name || "")
     .replace(/^TTF\d+\s*/i, "")
-    .replace(/^TTV\d+\s*/i)
+    .replace(/^TTV\d+\s*/i, "")
     .replace(/^TTL\d+\s*/i, "")
     .replace(/\[.*?\]/g, "")
     .trim() || "Service";
 }
 
-// ================= FIXED PLATFORM DETECTION =================
+// ================= 🔥 FIXED PLATFORM DETECTION =================
 function detectPlatform(service = {}) {
-  const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
+  const text = `
+    ${service.name || ""}
+    ${service.category || ""}
+    ${service.type || ""}
+    ${service.service || ""}
+  `.toLowerCase();
 
-  // 🔥 MORE ACCURATE DETECTION (FIXED)
-  if (text.includes("instagram")) return "Instagram";
-  if (text.includes("ig ") || text.includes("ig-") || text.includes("insta")) return "Instagram";
+  // Instagram (expanded detection)
+  if (
+    text.includes("instagram") ||
+    text.includes("insta") ||
+    text.includes("ig") ||
+    text.includes("instagram followers") ||
+    text.includes("instagram likes")
+  ) return "Instagram";
 
-  if (text.includes("tiktok") || text.includes("tik tok")) return "TikTok";
+  // TikTok
+  if (
+    text.includes("tiktok") ||
+    text.includes("tik tok") ||
+    text.includes("tt followers")
+  ) return "TikTok";
 
-  if (text.includes("youtube") || text.includes("yt ")) return "YouTube";
+  // YouTube
+  if (
+    text.includes("youtube") ||
+    text.includes("yt") ||
+    text.includes("subscribers")
+  ) return "YouTube";
 
-  if (text.includes("facebook") || text.includes("fb ")) return "Facebook";
+  // Facebook
+  if (
+    text.includes("facebook") ||
+    text.includes("fb") ||
+    text.includes("page likes")
+  ) return "Facebook";
 
-  if (text.includes("twitter") || text.includes("x followers") || text.includes("x views")) return "Twitter/X";
+  // Twitter / X
+  if (
+    text.includes("twitter") ||
+    text.includes("x followers") ||
+    text.includes("x views")
+  ) return "Twitter/X";
 
-  if (text.includes("telegram")) return "Telegram";
+  // Telegram
+  if (text.includes("telegram") || text.includes("tg")) return "Telegram";
 
   return "Other";
 }
@@ -85,7 +116,7 @@ function getMarkup(name = "") {
   return 40;
 }
 
-// ================= PRICE ENGINE =================
+// ================= PRICE =================
 function applyProviderRate(rate) {
   rate = Number(rate || 0);
 
@@ -146,12 +177,11 @@ app.get("/api/me", auth, async (req, res) => {
   res.json(user);
 });
 
-// ================= SERVICES (FIXED PLATFORM + CLICK READY) =================
+// ================= SERVICES (FIXED GROUPING) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
-    // FETCH IF EMPTY
     if (!services.length) {
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url, { timeout: 20000 });
@@ -165,7 +195,7 @@ app.get("/api/services", async (req, res) => {
         const final = applyFinalPrice(s.rate, name);
 
         return {
-          serviceId: String(s.service || s.id || `srv_${i}`), // FIXED SAFE ID
+          serviceId: String(s.service || s.id || `srv_${i}`),
           name,
           rate: final.rate,
           min: Number(s.min || 1),
@@ -179,18 +209,18 @@ app.get("/api/services", async (req, res) => {
       await Service.insertMany(services);
     }
 
-    // NORMALIZE AGAIN (SAFETY)
-    services = services.map((s, i) => ({
+    // FORCE FIX PLATFORM ON OLD DATA
+    services = services.map(s => ({
       ...s,
-      serviceId: String(s.serviceId || `srv_${i}`),
+      platform: detectPlatform(s),
       name: cleanName(s.name),
       rate: Number(s.rate || 0)
     }));
 
-    // GROUPING FIXED
+    // GROUPING (FIXED)
     const grouped = {};
 
-    services.forEach(s => {
+    for (const s of services) {
       const platform = s.platform || "Other";
       const category = s.category || "General";
 
@@ -200,21 +230,22 @@ app.get("/api/services", async (req, res) => {
       grouped[platform][category].push({
         serviceId: s.serviceId,
         name: s.name,
-
-        // ONLY FINAL PRICE
         rate: Number(s.rate).toFixed(2)
       });
+    }
+
+    res.json({
+      success: true,
+      data: grouped
     });
 
-    res.json({ success: true, data: grouped });
-
   } catch (err) {
-    console.error("SERVICE ERROR:", err.message);
+    console.error("SERVICES ERROR:", err.message);
     res.status(500).json({ error: "Services failed" });
   }
 });
 
-// ================= ORDER (CLICK READY FLOW) =================
+// ================= ORDER =================
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
