@@ -44,68 +44,40 @@ function auth(req, res, next) {
 
 // ================= CLEAN NAME =================
 function cleanName(name = "") {
-  const cleaned = String(name || "")
+  return String(name || "")
     .replace(/^TTF\d+\s*/i, "")
     .replace(/^TTV\d+\s*/i, "")
     .replace(/^TTL\d+\s*/i, "")
     .replace(/\[.*?\]/g, "")
-    .trim();
-
-  return cleaned || "Service";
+    .trim() || "Service";
 }
 
-// ================= PLATFORM (FIXED STRONG DETECTION) =================
+// ================= PLATFORM DETECTION =================
 function detectPlatform(service = {}) {
   const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
 
-  // 🔥 EXTENDED KEYWORDS (THIS FIXES YOUR ISSUE)
-  if (
-    text.includes("instagram") ||
-    text.includes("ig ")
-  ) return "Instagram";
-
-  if (
-    text.includes("tiktok") ||
-    text.includes("tik tok")
-  ) return "TikTok";
-
-  if (
-    text.includes("youtube") ||
-    text.includes("yt ")
-  ) return "YouTube";
-
-  if (
-    text.includes("facebook") ||
-    text.includes("fb ")
-  ) return "Facebook";
-
-  if (
-    text.includes("twitter") ||
-    text.includes("tweet") ||
-    text.includes("x.com")
-  ) return "Twitter/X";
-
-  if (text.includes("telegram")) return "Telegram";
-  if (text.includes("whatsapp")) return "WhatsApp";
-  if (text.includes("spotify")) return "Spotify";
-  if (text.includes("threads")) return "Threads";
+  if (text.includes("instagram")) return "Instagram";
+  if (text.includes("tiktok")) return "TikTok";
+  if (text.includes("youtube")) return "YouTube";
+  if (text.includes("facebook")) return "Facebook";
+  if (text.includes("twitter") || text.includes("x")) return "Twitter/X";
 
   return "Other";
 }
 
-// ================= MARKUP =================
+// ================= MARKUP SYSTEM =================
 function getMarkup(name = "") {
   const text = String(name).toLowerCase();
 
   if (text.includes("like")) return 30;
   if (text.includes("follower")) return 20;
   if (text.includes("view")) return 40;
-  if (text.includes("save")) return 40;
+  if (text.includes("save") || text.includes("saved")) return 40;
 
   return 40;
 }
 
-// ================= PROFIT =================
+// ================= PRICE ENGINE =================
 function applyProviderRate(rate) {
   rate = Number(rate || 0);
 
@@ -114,14 +86,15 @@ function applyProviderRate(rate) {
   return rate * 1.3;
 }
 
-// ================= FINAL PRICE =================
 function applyFinalPrice(rate, name) {
-  const provider = applyProviderRate(rate);
+  const providerPrice = applyProviderRate(rate);
   const markup = getMarkup(name);
 
+  const final = providerPrice + markup;
+
   return {
-    baseRate: Number(provider.toFixed(2)),
-    rate: Number((provider + markup).toFixed(2))
+    // IMPORTANT: provider price is NEVER sent to frontend
+    rate: Number(final.toFixed(2))
   };
 }
 
@@ -168,7 +141,7 @@ app.get("/api/me", auth, async (req, res) => {
   res.json(user);
 });
 
-// ================= SERVICES =================
+// ================= SERVICES (FIXED PRICE LEAK) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
@@ -182,17 +155,20 @@ app.get("/api/services", async (req, res) => {
 
       services = list.map((s, i) => {
         const safeName = cleanName(s.name);
-        const pricing = applyFinalPrice(s.rate, safeName);
+
+        const finalPrice = applyFinalPrice(s.rate, safeName);
 
         return {
           serviceId: String(s.service || s.id || `srv_${i}`),
           name: safeName,
-          baseRate: pricing.baseRate,
-          rate: pricing.rate,
+
+          // 🔥 ONLY FINAL PRICE SENT
+          rate: finalPrice.rate,
+
           min: Number(s.min || 1),
           max: Number(s.max || 10000),
           category: s.category || "Other",
-          platform: detectPlatform(s) // ✅ NOW WORKS PROPERLY
+          platform: detectPlatform(s)
         };
       });
 
@@ -200,7 +176,20 @@ app.get("/api/services", async (req, res) => {
       await Service.insertMany(services);
     }
 
-    // GROUP
+    // FIX OLD DATA AGAIN (SAFETY)
+    services = services.map((s, i) => {
+      const safeName = cleanName(s.name);
+      const finalPrice = applyFinalPrice(s.rate, safeName);
+
+      return {
+        ...s,
+        serviceId: String(s.serviceId || `srv_${i}`),
+        name: safeName,
+        rate: finalPrice.rate // 🔥 FORCE FINAL PRICE
+      };
+    });
+
+    // GROUP SERVICES
     const grouped = {};
 
     services.forEach(s => {
@@ -213,6 +202,8 @@ app.get("/api/services", async (req, res) => {
       grouped[platform][category].push({
         serviceId: s.serviceId,
         name: s.name,
+
+        // 🔥 FRONTEND ONLY SEES THIS
         rate: Number(s.rate || 0).toFixed(2)
       });
     });
