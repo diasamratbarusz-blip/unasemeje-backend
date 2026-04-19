@@ -18,25 +18,21 @@ const fetchProviderServices = async () => {
     const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
 
     const response = await axios.get(url, {
-      timeout: 15000
+      timeout: 20000
     });
 
     const raw = response.data;
 
-    if (!raw) {
-      throw new Error("Empty provider response");
-    }
+    if (!raw) throw new Error("Empty provider response");
 
-    let services = [];
-
-    if (Array.isArray(raw)) {
-      services = raw;
-    } else if (typeof raw === "object") {
-      services = Object.values(raw).flat();
-    }
+    let services = Array.isArray(raw)
+      ? raw
+      : typeof raw === "object"
+        ? Object.values(raw).flat()
+        : [];
 
     return services.map((s) => ({
-      serviceId: String(s.service || s.id),
+      serviceId: String(s.service || s.id || ""),
       name: s.name || "Unnamed Service",
       rate: Number(s.rate || s.cost || 0),
       min: Number(s.min || 1),
@@ -47,16 +43,16 @@ const fetchProviderServices = async () => {
 
   } catch (err) {
     console.error("❌ Provider fetch error:", err.message);
-    throw err;
+    return [];
   }
 };
 
 /* =========================
-   SAVE TO DATABASE (UPSERT)
+   SYNC TO DATABASE
 ========================= */
 const syncServicesToDB = async (services) => {
   try {
-    if (!services || !services.length) return;
+    if (!services.length) return;
 
     const ops = services.map((s) => ({
       updateOne: {
@@ -77,13 +73,13 @@ const syncServicesToDB = async (services) => {
    PLATFORM DETECTION
 ========================= */
 function detectPlatform(text = "", category = "") {
-  text = (text + " " + category).toLowerCase();
+  const t = `${text} ${category}`.toLowerCase();
 
-  if (text.includes("instagram")) return "Instagram";
-  if (text.includes("tiktok")) return "TikTok";
-  if (text.includes("youtube")) return "YouTube";
-  if (text.includes("facebook")) return "Facebook";
-  if (text.includes("twitter") || text.includes("x")) return "Twitter/X";
+  if (t.includes("instagram")) return "Instagram";
+  if (t.includes("tiktok")) return "TikTok";
+  if (t.includes("youtube")) return "YouTube";
+  if (t.includes("facebook")) return "Facebook";
+  if (t.includes("twitter") || t.includes("x")) return "Twitter/X";
 
   return "Other";
 }
@@ -92,20 +88,20 @@ function detectPlatform(text = "", category = "") {
    TYPE DETECTION
 ========================= */
 function detectType(name = "") {
-  name = name.toLowerCase();
+  const n = name.toLowerCase();
 
-  if (name.includes("followers")) return "Followers";
-  if (name.includes("likes")) return "Likes";
-  if (name.includes("views")) return "Views";
-  if (name.includes("comments")) return "Comments";
-  if (name.includes("subscribers")) return "Subscribers";
+  if (n.includes("followers")) return "Followers";
+  if (n.includes("likes")) return "Likes";
+  if (n.includes("views")) return "Views";
+  if (n.includes("comments")) return "Comments";
+  if (n.includes("subscribers")) return "Subscribers";
+  if (n.includes("save")) return "Saved";
 
   return "Other";
 }
 
 /* =========================
-   GET FLAT SERVICES
-   /api/services/all
+   FLAT SERVICES
 ========================= */
 router.get("/all", async (req, res) => {
   try {
@@ -133,8 +129,7 @@ router.get("/all", async (req, res) => {
 });
 
 /* =========================
-   GET GROUPED SERVICES
-   /api/services
+   GROUPED SERVICES
 ========================= */
 router.get("/", async (req, res) => {
   try {
@@ -158,7 +153,7 @@ router.get("/", async (req, res) => {
       grouped[platform][type].push({
         serviceId: s.serviceId,
         name: s.name,
-        rate: Number(s.rate).toFixed(2),
+        rate: Number(s.rate || 0).toFixed(2),
         min: s.min,
         max: s.max,
         category: s.category
