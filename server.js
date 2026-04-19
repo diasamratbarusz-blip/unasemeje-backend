@@ -1,106 +1,126 @@
+// ================= IMPORTS =================
 require("dotenv").config();
+
+// ✅ DEBUG ENV VARIABLES (ADDED)
+console.log("SMM_API_URL:", process.env.SMM_API_URL);
+console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
 
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
-const mongoose = require("mongoose");
 const axios = require("axios");
 
-const app = express();
+// DB
+const connectDB = require("./config/db");
+const log = require("./utils/logger");
 
-app.use(cors());
-app.use(express.json());
-
-/* ================= DB ================= */
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ DB connected"))
-  .catch(err => console.log("DB error:", err));
-
-/* ================= MODELS ================= */
+// MODELS
 const User = require("./models/User");
 const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
-/* ================= CONFIG ================= */
-const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
+// UTILS (optional)
+const smmRequest = require("./utils/smmApi");
 
-/* ================= AUTH ================= */
+// ================= VALIDATE ENV =================
+if (!process.env.JWT_SECRET) {
+  console.error("❌ JWT_SECRET missing in environment variables");
+  process.exit(1);
+}
+
+// ================= INIT =================
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+// ================= CONNECT DB =================
+connectDB();
+log("Server starting...");
+
+// ================= AUTH =================
 function auth(req, res, next) {
   try {
-    const token = req.headers.authorization?.split(" ")[1];
-    if (!token) return res.status(401).json({ error: "No token" });
+    const header = req.headers.authorization;
 
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    if (!header) {
+      return res.status(401).json({ error: "No token provided" });
+    }
+
+    const token = header.split(" ")[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    req.user = decoded;
     next();
-  } catch {
+  } catch (err) {
     return res.status(401).json({ error: "Invalid token" });
   }
 }
 
-/* ================= ADMIN ================= */
-function adminOnly(req, res, next) {
-  if (req.user.email !== ADMIN_EMAIL) {
-    return res.status(403).json({ error: "Admin only" });
-  }
-  next();
-}
-
-/* ================= HELPERS ================= */
+// ================= CLEAN SERVICE NAME =================
 function cleanName(name = "") {
-  return String(name)
+  return name
+    .replace(/^TTF\d+\s*/i, "")
+    .replace(/^TTV\d+\s*/i, "")
+    .replace(/^TTL\d+\s*/i, "")
     .replace(/\[.*?\]/g, "")
-    .replace(/^TT.*?\s/i, "")
     .trim();
 }
 
-/* ================= PLATFORM DETECTION ================= */
+// ================= PLATFORM DETECTION =================
 function detectPlatform(service = {}) {
   const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
-  const rate = Number(service.rate || 0);
 
-  if (text.includes("instagram") || text.includes("ig")) return "Instagram";
-  if (text.includes("tiktok") || text.includes("tt")) return "TikTok";
-  if (text.includes("youtube") || text.includes("yt")) return "YouTube";
-  if (text.includes("facebook") || text.includes("fb")) return "Facebook";
-
-  if (rate > 0 && rate < 5) return "TikTok";
-  if (rate >= 5 && rate < 20) return "Instagram";
-  if (rate >= 20 && rate < 60) return "YouTube";
+  if (text.includes("instagram")) return "Instagram";
+  if (text.includes("tiktok")) return "TikTok";
+  if (text.includes("youtube")) return "YouTube";
+  if (text.includes("facebook")) return "Facebook";
+  if (text.includes("twitter") || text.includes("x")) return "Twitter/X";
 
   return "Other";
 }
 
-/* ================= COST ================= */
-function calculateCost(rate, qty) {
-  return (Number(rate) / 1000) * Number(qty);
+// ================= PROFIT SYSTEM =================
+function getProfit(rate) {
+  if (rate < 50) return 1.8;
+  if (rate < 200) return 1.5;
+  return 1.3;
 }
 
-/* ================= ROOT ================= */
+function applyProfit(rate) {
+  return Number((rate * getProfit(rate)).toFixed(2));
+}
+
+function calculateCost(rate, qty) {
+  return (applyProfit(rate) / 1000) * Number(qty);
+}
+
+// ================= ROOT =================
 app.get("/", (req, res) => {
-  res.send("🚀 SMM Backend Running");
+  res.send("🚀 Backend running successfully");
 });
 
-/* ================= AUTH ================= */
+// ================= AUTH =================
 app.post("/api/register", async (req, res) => {
   const { email, password, phone } = req.body;
 
   const exists = await User.findOne({ email });
-  if (exists) return res.status(400).json({ error: "User exists" });
+  if (exists) return res.status(400).json({ error: "User already exists" });
 
   await User.create({ email, password, phone });
 
-  res.json({ message: "Registered" });
+  res.json({ message: "Registered successfully" });
 });
 
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
 
   const user = await User.findOne({ email, password });
-  if (!user) return res.status(400).json({ error: "Invalid login" });
+  if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
   const token = jwt.sign(
-    { id: user._id, email: user.email },
+    { id: user._id, role: user.role, email: user.email },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
@@ -108,112 +128,38 @@ app.post("/api/login", async (req, res) => {
   res.json({ token });
 });
 
+// ================= USER =================
 app.get("/api/me", auth, async (req, res) => {
   const user = await User.findById(req.user.id);
   res.json(user);
 });
 
-/* ================= M-PESA PARSER ================= */
-function extractMpesa(message) {
-  const code = message.match(/[A-Z0-9]{8,12}/)?.[0];
-  const amount = message.match(/Ksh\s?([\d,]+)/i)?.[1];
-  const phone = message.match(/(\d{10,12})/)?.[0];
-
-  return {
-    code,
-    amount: amount ? Number(amount.replace(/,/g, "")) : 0,
-    phone
-  };
-}
-
-/* ================= DEPOSIT ================= */
-app.post("/api/deposit", auth, async (req, res) => {
-  try {
-    const { message } = req.body;
-
-    const data = extractMpesa(message);
-
-    if (!data.code || !data.amount) {
-      return res.status(400).json({ error: "Invalid M-Pesa message" });
-    }
-
-    const exists = await Deposit.findOne({ transactionCode: data.code });
-    if (exists) {
-      return res.status(400).json({ error: "Transaction already used" });
-    }
-
-    await Deposit.create({
-      userId: req.user.id,
-      phone: data.phone,
-      amount: data.amount,
-      transactionCode: data.code,
-      message,              // FULL M-PESA MESSAGE STORED
-      status: "pending"
-    });
-
-    res.json({ message: "Deposit submitted successfully" });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Deposit failed" });
-  }
-});
-
-/* ================= ADMIN DEPOSITS ================= */
-app.get("/api/admin/deposits", auth, adminOnly, async (req, res) => {
-  const deposits = await Deposit.find().sort({ createdAt: -1 });
-  res.json(deposits);
-});
-
-/* ================= APPROVE DEPOSIT ================= */
-app.post("/api/admin/approve", auth, adminOnly, async (req, res) => {
-  try {
-    const { id } = req.body;
-
-    const dep = await Deposit.findById(id);
-    if (!dep || dep.status === "approved") {
-      return res.status(400).json({ error: "Invalid deposit" });
-    }
-
-    const user = await User.findById(dep.userId);
-    if (!user) return res.status(404).json({ error: "User not found" });
-
-    user.balance += dep.amount;
-    await user.save();
-
-    dep.status = "approved";
-    dep.approvedAt = new Date();
-    await dep.save();
-
-    res.json({ message: "Deposit approved" });
-
-  } catch (err) {
-    res.status(500).json({ error: "Approval failed" });
-  }
-});
-
-/* ================= SERVICES ================= */
+// ================= SERVICES (FIXED + GUARANTEED DISPLAY) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
+    // IF EMPTY → FETCH FROM PROVIDER
     if (!services.length) {
-      const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
-      const response = await axios.get(url);
+      console.log("⚠️ Fetching services from provider...");
 
-      const list = Array.isArray(response.data)
-        ? response.data
-        : Object.values(response.data);
+      const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
+      const response = await axios.get(url, { timeout: 20000 });
+
+      const raw = response.data;
+      const list = Array.isArray(raw) ? raw : Object.values(raw || {});
 
       services = list.map(s => ({
         serviceId: String(s.service || s.id),
-        name: cleanName(s.name),
-        rate: Number(s.rate || 0),
-        category: s.category,
+        name: cleanName(s.name || "Service"),
+        baseRate: Number(s.rate || 0),
+        rate: applyProfit(Number(s.rate || 0)),
+        min: Number(s.min || 1),
+        max: Number(s.max || 10000),
+        category: s.category || "Other",
         platform: detectPlatform({
           name: s.name,
-          category: s.category,
-          rate: s.rate
+          category: s.category
         })
       }));
 
@@ -221,36 +167,49 @@ app.get("/api/services", async (req, res) => {
       await Service.insertMany(services);
     }
 
+    // GROUP SERVICES (FRONTEND READY)
     const grouped = {};
 
     services.forEach(s => {
-      if (!grouped[s.platform]) grouped[s.platform] = [];
+      const platform = s.platform || "Other";
+      const category = s.category || "General";
 
-      grouped[s.platform].push({
+      if (!grouped[platform]) grouped[platform] = {};
+      if (!grouped[platform][category]) grouped[platform][category] = [];
+
+      grouped[platform][category].push({
         serviceId: s.serviceId,
         name: s.name,
-        rate: s.rate,
-        category: s.category
+        rate: Number(s.rate).toFixed(2),
+        min: s.min,
+        max: s.max
       });
     });
 
-    res.json({ data: grouped });
+    res.json({
+      success: true,
+      data: grouped
+    });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Services failed" });
+    console.error("❌ SERVICES ERROR:", err.message);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to load services"
+    });
   }
 });
 
-/* ================= ORDER ================= */
+// ================= ORDER =================
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
 
     const service = await Service.findOne({ serviceId });
-    if (!service) return res.status(404).json({ error: "Not found" });
+    if (!service) return res.status(404).json({ error: "Service not found" });
 
-    const cost = calculateCost(service.rate, quantity);
+    const cost = calculateCost(service.baseRate, quantity);
 
     const user = await User.findById(req.user.id);
 
@@ -263,15 +222,18 @@ app.post("/api/order", auth, async (req, res) => {
 
     const order = await Order.create({
       userId: user._id,
+      service: service.name,
       serviceId,
-      serviceName: service.name,
       link,
       quantity,
-      cost,
-      rate: service.rate
+      cost
     });
 
-    res.json({ message: "Order placed", order });
+    res.json({
+      message: "Order placed",
+      order,
+      balance: user.balance
+    });
 
   } catch (err) {
     console.error(err);
@@ -279,14 +241,16 @@ app.post("/api/order", auth, async (req, res) => {
   }
 });
 
-/* ================= ORDERS ================= */
+// ================= ORDERS =================
 app.get("/api/orders", auth, async (req, res) => {
   const orders = await Order.find({ userId: req.user.id });
   res.json(orders);
 });
 
-/* ================= START ================= */
+// ================= START SERVER =================
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log("🚀 Server running on", PORT);
+  console.log("🚀 Server running on port", PORT);
+  log(`Server running on port ${PORT}`);
 });
