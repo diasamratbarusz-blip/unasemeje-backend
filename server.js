@@ -1,6 +1,8 @@
 // ================= IMPORTS =================
 require("dotenv").config();
 
+const crypto = require("crypto");
+
 console.log("SMM_API_URL:", process.env.SMM_API_URL);
 console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
 
@@ -23,17 +25,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ================= ADMIN =================
+const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
+const ADMIN_PHONE = "0715509440";
+
 // ================= CONNECT DB =================
 connectDB();
 log("Server starting...");
-
-// ================= 🔥 ADMIN CHECK =================
-function isAdminUser(user) {
-  return (
-    user.email === "diasamratbarusz@gmail.com" ||
-    user.phone === "0715509440"
-  );
-}
 
 // ================= AUTH =================
 function auth(req, res, next) {
@@ -42,25 +40,12 @@ function auth(req, res, next) {
     if (!header) return res.status(401).json({ error: "No token" });
 
     const token = header.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    req.user = decoded;
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
 
     next();
   } catch {
     return res.status(401).json({ error: "Invalid token" });
   }
-}
-
-// ================= ADMIN MIDDLEWARE =================
-async function admin(req, res, next) {
-  const user = await User.findById(req.user.id);
-
-  if (!user || !isAdminUser(user)) {
-    return res.status(403).json({ error: "Admin only" });
-  }
-
-  next();
 }
 
 // ================= CLEAN NAME =================
@@ -81,7 +66,7 @@ function detectPlatform(service = {}) {
   if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
   if (/(youtube|yt|subscriber)/.test(text)) return "YouTube";
   if (/(facebook|fb)/.test(text)) return "Facebook";
-  if (/(twitter|x.com|tweet)/.test(text)) return "Twitter/X";
+  if (/(twitter|x)/.test(text)) return "Twitter/X";
   if (/(telegram|tg)/.test(text)) return "Telegram";
 
   return "Other";
@@ -92,9 +77,10 @@ function getMarkup(name = "") {
   const text = String(name).toLowerCase();
 
   if (text.includes("like")) return 30;
-  if (text.includes("follower")) return 20;
-  if (text.includes("view")) return 40;
-  if (text.includes("comment")) return 35;
+  if (text.includes("follower")) return 25;
+  if (text.includes("view")) return 35;
+  if (text.includes("comment")) return 40;
+  if (text.includes("save")) return 40;
 
   return 40;
 }
@@ -132,9 +118,9 @@ app.post("/api/register", async (req, res) => {
   const exists = await User.findOne({ email });
   if (exists) return res.status(400).json({ error: "User exists" });
 
-  const user = await User.create({ email, password, phone });
+  await User.create({ email, password, phone });
 
-  res.json({ message: "Registered", user });
+  res.json({ message: "Registered" });
 });
 
 app.post("/api/login", async (req, res) => {
@@ -144,11 +130,7 @@ app.post("/api/login", async (req, res) => {
   if (!user) return res.status(400).json({ error: "Invalid login" });
 
   const token = jwt.sign(
-    {
-      id: user._id,
-      email: user.email,
-      isAdmin: isAdminUser(user)
-    },
+    { id: user._id, email: user.email, role: user.role },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
@@ -161,8 +143,10 @@ app.get("/api/me", auth, async (req, res) => {
   const user = await User.findById(req.user.id);
 
   res.json({
-    ...user.toObject(),
-    isAdmin: isAdminUser(user)
+    email: user.email,
+    phone: user.phone,
+    balance: user.balance,
+    apiKey: user.apiKey || null
   });
 });
 
@@ -176,9 +160,7 @@ app.get("/api/services", async (req, res) => {
       const response = await axios.get(url, { timeout: 20000 });
 
       const raw = response.data;
-      const list = Array.isArray(raw)
-        ? raw
-        : Object.values(raw || {}).flat();
+      const list = Array.isArray(raw) ? raw : Object.values(raw || {}).flat();
 
       services = list.map((s, i) => ({
         serviceId: String(s.service || s.id || `srv_${i}`),
@@ -186,31 +168,27 @@ app.get("/api/services", async (req, res) => {
         rate: Number(s.rate || 0),
         min: Number(s.min || 1),
         max: Number(s.max || 10000),
-        category: s.category || "General"
+        category: s.category || "General",
+        platform: detectPlatform(s)
       }));
 
       await Service.deleteMany({});
       await Service.insertMany(services);
     }
 
-    services = services.map((s, i) => {
-      const clean = cleanName(s.name);
-      const finalPrice = applyFinalPrice(s.rate, clean);
-
-      return {
-        serviceId: String(s.serviceId || `srv_${i}`),
-        name: clean,
-        rate: finalPrice,
-        min: s.min,
-        max: s.max,
-        category: s.category || "General",
-        platform: detectPlatform(s)
-      };
-    });
+    services = services.map((s, i) => ({
+      serviceId: String(s.serviceId || `srv_${i}`),
+      name: cleanName(s.name),
+      rate: applyFinalPrice(s.rate, s.name),
+      min: s.min,
+      max: s.max,
+      category: s.category || "General",
+      platform: detectPlatform(s)
+    }));
 
     const grouped = {};
 
-    for (const s of services) {
+    services.forEach(s => {
       const platform = s.platform || "Other";
       const category = s.category || "General";
 
@@ -220,16 +198,13 @@ app.get("/api/services", async (req, res) => {
       grouped[platform][category].push({
         serviceId: s.serviceId,
         name: s.name,
-        rate: Number(s.rate).toFixed(2),
-        min: s.min,
-        max: s.max
+        rate: s.rate
       });
-    }
+    });
 
     res.json({ success: true, data: grouped });
 
   } catch (err) {
-    console.error("SERVICES ERROR:", err.message);
     res.status(500).json({ error: "Services failed" });
   }
 });
@@ -242,8 +217,7 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    const finalRate = applyFinalPrice(service.rate, service.name);
-    const cost = calculateCost(finalRate, quantity);
+    const cost = calculateCost(service.rate, quantity);
 
     const user = await User.findById(req.user.id);
 
@@ -274,36 +248,81 @@ app.post("/api/order", auth, async (req, res) => {
   }
 });
 
-// ================= ADMIN ROUTES =================
-
-// USERS
-app.get("/api/admin/users", auth, admin, async (req, res) => {
-  const users = await User.find();
-  res.json(users);
+// ================= ORDERS =================
+app.get("/api/orders", auth, async (req, res) => {
+  const orders = await Order.find({ userId: req.user.id });
+  res.json(orders);
 });
 
-// DEPOSITS
-app.get("/api/admin/deposits", auth, admin, async (req, res) => {
-  const deposits = await Deposit.find();
-  res.json(deposits);
+// ================= DEPOSIT =================
+app.post("/api/deposit", auth, async (req, res) => {
+  const { message } = req.body;
+
+  const code = message?.match(/[A-Z0-9]{8,12}/)?.[0];
+  const amount = message?.match(/Ksh\s?([\d,]+)/i)?.[1];
+  const phone = message?.match(/(\d{10,12})/)?.[0];
+
+  if (!code) return res.status(400).json({ error: "Invalid message" });
+
+  const exists = await Deposit.findOne({ transactionCode: code });
+  if (exists) return res.status(400).json({ error: "Used transaction" });
+
+  await Deposit.create({
+    userId: req.user.id,
+    phone,
+    amount: Number(amount || 0),
+    transactionCode: code,
+    message,
+    status: "pending"
+  });
+
+  res.json({ message: "Deposit submitted. Request is in progress." });
 });
 
-// APPROVE DEPOSIT
-app.post("/api/admin/approve-deposit", auth, admin, async (req, res) => {
-  const { depositId } = req.body;
+// ================= PASSWORD CHANGE =================
+app.post("/api/change-password", auth, async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
 
-  const deposit = await Deposit.findById(depositId);
-  if (!deposit) return res.status(400).json({ error: "Not found" });
+    const user = await User.findById(req.user.id);
 
-  const user = await User.findById(deposit.userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
 
-  user.balance += deposit.amount;
-  await user.save();
+    if (user.password !== oldPassword) {
+      return res.status(400).json({ error: "Old password is wrong" });
+    }
 
-  deposit.status = "approved";
-  await deposit.save();
+    user.password = newPassword;
+    await user.save();
 
-  res.json({ message: "Approved" });
+    res.json({ message: "Password updated successfully" });
+
+  } catch (err) {
+    res.status(500).json({ error: "Password update failed" });
+  }
+});
+
+// ================= API KEY =================
+app.get("/api/api-key", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    if (user.apiKey) {
+      return res.json({ apiKey: user.apiKey });
+    }
+
+    const apiKey = crypto.randomBytes(24).toString("hex");
+
+    user.apiKey = apiKey;
+    await user.save();
+
+    res.json({ apiKey });
+
+  } catch (err) {
+    res.status(500).json({ error: "Failed to generate API key" });
+  }
 });
 
 // ================= START =================
