@@ -26,28 +26,28 @@ async function fetchServicesFromProvider() {
 
   return res.data.map(s => ({
     serviceId: String(s.service),
-    name: s.name,
+    name: s.name || "Service",
     category: s.category || "Other",
-    rate: Number(s.rate),
-    min: Number(s.min),
-    max: Number(s.max)
+    rate: Number(s.rate || 0),
+    min: Number(s.min || 1),
+    max: Number(s.max || 10000)
   }));
 }
 
-// ================= PLATFORM DETECTION =================
-function getPlatform(category = "") {
-  const c = category.toLowerCase();
+// ================= PLATFORM DETECTION (FIXED 🔥) =================
+function getPlatform(name = "", category = "") {
+  const text = (name + " " + category).toLowerCase();
 
-  if (c.includes("instagram")) return "Instagram";
-  if (c.includes("tiktok")) return "TikTok";
-  if (c.includes("youtube")) return "YouTube";
-  if (c.includes("facebook")) return "Facebook";
-  if (c.includes("twitter") || c.includes("x")) return "Twitter/X";
+  if (text.includes("instagram") || text.includes("ig")) return "Instagram";
+  if (text.includes("tiktok") || text.includes("tik tok")) return "TikTok";
+  if (text.includes("youtube") || text.includes("yt")) return "YouTube";
+  if (text.includes("facebook") || text.includes("fb")) return "Facebook";
+  if (text.includes("twitter") || text.includes("x")) return "Twitter/X";
 
   return "Other";
 }
 
-// ================= SERVICE TYPE DETECTION =================
+// ================= TYPE DETECTION =================
 function getType(name = "") {
   const n = name.toLowerCase();
 
@@ -55,25 +55,36 @@ function getType(name = "") {
   if (n.includes("like")) return "Likes";
   if (n.includes("view")) return "Views";
   if (n.includes("comment")) return "Comments";
-  if (n.includes("share")) return "Shares";
+  if (n.includes("save")) return "Saved";
 
   return "Other";
+}
+
+// ================= MARKUP SYSTEM (YOUR RULES ✅) =================
+function getMarkup(name = "") {
+  const text = name.toLowerCase();
+
+  if (text.includes("like")) return 30;
+  if (text.includes("follower")) return 20;
+  if (text.includes("view")) return 40;
+  if (text.includes("save")) return 40;
+
+  return 40;
 }
 
 // ================= MAIN ROUTE =================
 router.get("/", async (req, res) => {
   try {
     const now = Date.now();
-
     let services;
 
-    // ================= CACHE CHECK =================
+    // ================= CACHE =================
     if (cache.data && now - cache.time < CACHE_TIME) {
       services = cache.data;
     } else {
       services = await Service.find();
 
-      // If DB empty → fetch from provider
+      // FETCH FROM PROVIDER IF EMPTY
       if (!services.length) {
         console.log("🔄 Fetching services from provider...");
 
@@ -89,13 +100,12 @@ router.get("/", async (req, res) => {
     }
 
     const { platform, search } = req.query;
-
     let filtered = services;
 
-    // ================= FILTER BY PLATFORM =================
+    // ================= FILTER =================
     if (platform) {
       filtered = filtered.filter(
-        s => getPlatform(s.category) === platform
+        s => getPlatform(s.name, s.category) === platform
       );
     }
 
@@ -106,36 +116,34 @@ router.get("/", async (req, res) => {
       );
     }
 
-    // ================= GROUPING =================
+    // ================= GROUP =================
     const grouped = {};
 
     for (let s of filtered) {
-      if (s.rate <= 0) continue;
+      if (!s.rate || s.rate <= 0) continue;
 
-      const platformName = getPlatform(s.category);
+      const platformName = getPlatform(s.name, s.category);
       const type = getType(s.name);
 
       if (!grouped[platformName]) grouped[platformName] = {};
       if (!grouped[platformName][type]) grouped[platformName][type] = [];
 
-      // ================= PROFIT SYSTEM =================
-      let profitPercent = 25;
-
-      if (s.rate < 1) profitPercent = 60;
-      else if (s.rate < 3) profitPercent = 35;
-      else if (s.rate < 10) profitPercent = 20;
-
-      const sellingRate =
-        s.rate + (s.rate * profitPercent) / 100;
+      // 🔥 APPLY YOUR MARKUP HERE
+      const markup = getMarkup(s.name);
+      const sellingRate = Number((s.rate + markup).toFixed(2));
 
       grouped[platformName][type].push({
         serviceId: s.serviceId,
         name: s.name,
-        rate: Number(sellingRate.toFixed(2)),
-        originalRate: s.rate,
+
+        // ✅ USER SEES ONLY THIS PRICE
+        rate: sellingRate,
+
+        // ❌ DO NOT expose provider price to frontend (optional)
+        // originalRate: s.rate,
+
         min: s.min,
-        max: s.max,
-        profit: profitPercent
+        max: s.max
       });
     }
 
