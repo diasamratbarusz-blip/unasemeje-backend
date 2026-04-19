@@ -48,6 +48,14 @@ function auth(req, res, next) {
   }
 }
 
+// ================= ADMIN CHECK =================
+function isAdmin(user) {
+  return (
+    user?.email === ADMIN_EMAIL ||
+    user?.phone === ADMIN_PHONE
+  );
+}
+
 // ================= CLEAN NAME =================
 function cleanName(name = "") {
   return String(name || "")
@@ -64,7 +72,7 @@ function detectPlatform(service = {}) {
 
   if (/(instagram|insta|ig)/.test(text)) return "Instagram";
   if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
-  if (/(youtube|yt|subscriber)/.test(text)) return "YouTube";
+  if (/(youtube|yt)/.test(text)) return "YouTube";
   if (/(facebook|fb)/.test(text)) return "Facebook";
   if (/(twitter|x)/.test(text)) return "Twitter/X";
   if (/(telegram|tg)/.test(text)) return "Telegram";
@@ -111,18 +119,25 @@ app.get("/", (req, res) => {
   res.send("🚀 Backend Running Successfully");
 });
 
-// ================= AUTH =================
+// ================= REGISTER =================
 app.post("/api/register", async (req, res) => {
   const { email, password, phone } = req.body;
 
   const exists = await User.findOne({ email });
   if (exists) return res.status(400).json({ error: "User exists" });
 
-  await User.create({ email, password, phone });
+  await User.create({
+    email,
+    password,
+    phone,
+    balance: 0,
+    apiKey: null
+  });
 
   res.json({ message: "Registered" });
 });
 
+// ================= LOGIN =================
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
 
@@ -130,7 +145,7 @@ app.post("/api/login", async (req, res) => {
   if (!user) return res.status(400).json({ error: "Invalid login" });
 
   const token = jwt.sign(
-    { id: user._id, email: user.email, role: user.role },
+    { id: user._id, email: user.email, phone: user.phone },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
@@ -248,12 +263,6 @@ app.post("/api/order", auth, async (req, res) => {
   }
 });
 
-// ================= ORDERS =================
-app.get("/api/orders", auth, async (req, res) => {
-  const orders = await Order.find({ userId: req.user.id });
-  res.json(orders);
-});
-
 // ================= DEPOSIT =================
 app.post("/api/deposit", auth, async (req, res) => {
   const { message } = req.body;
@@ -276,53 +285,43 @@ app.post("/api/deposit", auth, async (req, res) => {
     status: "pending"
   });
 
-  res.json({ message: "Deposit submitted. Request is in progress." });
+  res.json({
+    message: "Your request is in progress you will get results shortly"
+  });
 });
 
 // ================= PASSWORD CHANGE =================
 app.post("/api/change-password", auth, async (req, res) => {
-  try {
-    const { oldPassword, newPassword } = req.body;
+  const { oldPassword, newPassword } = req.body;
 
-    const user = await User.findById(req.user.id);
+  const user = await User.findById(req.user.id);
 
-    if (!user) return res.status(404).json({ error: "User not found" });
+  if (!user) return res.status(404).json({ error: "User not found" });
 
-    if (user.password !== oldPassword) {
-      return res.status(400).json({ error: "Old password is wrong" });
-    }
-
-    user.password = newPassword;
-    await user.save();
-
-    res.json({ message: "Password updated successfully" });
-
-  } catch (err) {
-    res.status(500).json({ error: "Password update failed" });
+  if (user.password !== oldPassword) {
+    return res.status(400).json({ error: "Old password is wrong" });
   }
+
+  user.password = newPassword;
+  await user.save();
+
+  res.json({ message: "Password updated successfully" });
 });
 
 // ================= API KEY =================
 app.get("/api/api-key", auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
+  const user = await User.findById(req.user.id);
 
-    if (!user) return res.status(404).json({ error: "User not found" });
-
-    if (user.apiKey) {
-      return res.json({ apiKey: user.apiKey });
-    }
-
-    const apiKey = crypto.randomBytes(24).toString("hex");
-
-    user.apiKey = apiKey;
-    await user.save();
-
-    res.json({ apiKey });
-
-  } catch (err) {
-    res.status(500).json({ error: "Failed to generate API key" });
+  if (user.apiKey) {
+    return res.json({ apiKey: user.apiKey });
   }
+
+  const apiKey = crypto.randomBytes(24).toString("hex");
+
+  user.apiKey = apiKey;
+  await user.save();
+
+  res.json({ apiKey });
 });
 
 // ================= START =================
