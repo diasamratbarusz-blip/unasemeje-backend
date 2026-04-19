@@ -1,7 +1,6 @@
 // ================= IMPORTS =================
 require("dotenv").config();
 
-// ✅ DEBUG ENV VARIABLES (ADDED)
 console.log("SMM_API_URL:", process.env.SMM_API_URL);
 console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
 
@@ -10,7 +9,6 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 
-// DB
 const connectDB = require("./config/db");
 const log = require("./utils/logger");
 
@@ -20,16 +18,6 @@ const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
-// UTILS (optional)
-const smmRequest = require("./utils/smmApi");
-
-// ================= VALIDATE ENV =================
-if (!process.env.JWT_SECRET) {
-  console.error("❌ JWT_SECRET missing in environment variables");
-  process.exit(1);
-}
-
-// ================= INIT =================
 const app = express();
 
 app.use(cors());
@@ -43,22 +31,18 @@ log("Server starting...");
 function auth(req, res, next) {
   try {
     const header = req.headers.authorization;
-
-    if (!header) {
-      return res.status(401).json({ error: "No token provided" });
-    }
+    if (!header) return res.status(401).json({ error: "No token" });
 
     const token = header.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
 
-    req.user = decoded;
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ error: "Invalid token" });
   }
 }
 
-// ================= CLEAN SERVICE NAME =================
+// ================= CLEAN NAME =================
 function cleanName(name = "") {
   return name
     .replace(/^TTF\d+\s*/i, "")
@@ -81,54 +65,85 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ================= MARKUP SYSTEM (ADDED) =================
+// ================= MARKUP SYSTEM =================
 function getMarkup(name = "") {
   const text = name.toLowerCase();
 
   if (text.includes("like")) return 30;
-  if (text.includes("follower")) return 20; // corrected
+  if (text.includes("follower")) return 20;
   if (text.includes("view")) return 40;
   if (text.includes("save") || text.includes("saved")) return 40;
 
-  return 40; // default
+  return 40;
 }
 
-// ================= APPLY PROFIT + MARKUP =================
-function applyProfit(rate) {
+// ================= PROFIT SYSTEM =================
+function applyProviderRate(rate) {
   if (rate < 50) return rate * 1.8;
   if (rate < 200) return rate * 1.5;
   return rate * 1.3;
 }
 
-// FINAL PRICE (BASE + MARKUP SYSTEM)
-function applyFinalPrice(baseRate, name) {
-  const providerPrice = applyProfit(baseRate);
+// FINAL PRICE = PROVIDER + MARKUP
+function applyFinalPrice(rate, name) {
+  const providerPrice = applyProviderRate(rate);
   const markup = getMarkup(name);
 
   return {
     baseRate: providerPrice,
-    rate: Number(providerPrice + markup)
+    rate: providerPrice + markup
   };
 }
 
-// ================= COST =================
+// ================= COST CALC =================
 function calculateCost(rate, qty) {
   return (rate / 1000) * Number(qty);
 }
 
 // ================= ROOT =================
 app.get("/", (req, res) => {
-  res.send("🚀 Backend running successfully");
+  res.send("🚀 Backend Running Successfully");
 });
 
-// ================= SERVICES (UPDATED WITH MARKUP) =================
+// ================= AUTH =================
+app.post("/api/register", async (req, res) => {
+  const { email, password, phone } = req.body;
+
+  const exists = await User.findOne({ email });
+  if (exists) return res.status(400).json({ error: "User exists" });
+
+  await User.create({ email, password, phone });
+
+  res.json({ message: "Registered" });
+});
+
+app.post("/api/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  const user = await User.findOne({ email, password });
+  if (!user) return res.status(400).json({ error: "Invalid login" });
+
+  const token = jwt.sign(
+    { id: user._id, email: user.email, role: user.role },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+
+  res.json({ token });
+});
+
+// ================= USER =================
+app.get("/api/me", auth, async (req, res) => {
+  const user = await User.findById(req.user.id);
+  res.json(user);
+});
+
+// ================= SERVICES =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
     if (!services.length) {
-      console.log("⚠️ Fetching services from provider...");
-
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url, { timeout: 20000 });
 
@@ -142,19 +157,13 @@ app.get("/api/services", async (req, res) => {
           serviceId: String(s.service || s.id),
           name: cleanName(s.name || "Service"),
 
-          // 🔥 PROVIDER PRICE (after provider profit)
           baseRate: pricing.baseRate,
-
-          // 🔥 FINAL USER PRICE (with YOUR markup)
           rate: pricing.rate,
 
           min: Number(s.min || 1),
           max: Number(s.max || 10000),
           category: s.category || "Other",
-          platform: detectPlatform({
-            name: s.name,
-            category: s.category
-          })
+          platform: detectPlatform(s)
         };
       });
 
@@ -175,24 +184,15 @@ app.get("/api/services", async (req, res) => {
         serviceId: s.serviceId,
         name: s.name,
         rate: Number(s.rate).toFixed(2),
-        baseRate: s.baseRate,
-        min: s.min,
-        max: s.max
+        baseRate: s.baseRate
       });
     });
 
-    res.json({
-      success: true,
-      data: grouped
-    });
+    res.json({ success: true, data: grouped });
 
   } catch (err) {
-    console.error("❌ SERVICES ERROR:", err.message);
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to load services"
-    });
+    console.error(err);
+    res.status(500).json({ error: "Services failed" });
   }
 });
 
@@ -241,10 +241,35 @@ app.get("/api/orders", auth, async (req, res) => {
   res.json(orders);
 });
 
+// ================= DEPOSIT =================
+app.post("/api/deposit", auth, async (req, res) => {
+  const { message } = req.body;
+
+  const code = message.match(/[A-Z0-9]{8,12}/)?.[0];
+  const amount = message.match(/Ksh\s?([\d,]+)/i)?.[1];
+  const phone = message.match(/(\d{10,12})/)?.[0];
+
+  if (!code) return res.status(400).json({ error: "Invalid message" });
+
+  const exists = await Deposit.findOne({ transactionCode: code });
+  if (exists) return res.status(400).json({ error: "Used transaction" });
+
+  await Deposit.create({
+    userId: req.user.id,
+    phone,
+    amount: Number(amount),
+    transactionCode: code,
+    message,
+    status: "pending"
+  });
+
+  res.json({ message: "Deposit submitted" });
+});
+
 // ================= START =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log("🚀 Server running on port", PORT);
-  log(`Server running on port ${PORT}`);
+  log("Server running on port " + PORT);
 });
