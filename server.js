@@ -51,18 +51,44 @@ function cleanName(name = "") {
     .replace(/\[.*?\]/g, "")
     .trim();
 
-  return cleaned || "Service"; // ✅ NEVER EMPTY
+  return cleaned || "Service";
 }
 
-// ================= PLATFORM =================
+// ================= PLATFORM (FIXED STRONG DETECTION) =================
 function detectPlatform(service = {}) {
   const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
 
-  if (text.includes("instagram")) return "Instagram";
-  if (text.includes("tiktok")) return "TikTok";
-  if (text.includes("youtube")) return "YouTube";
-  if (text.includes("facebook")) return "Facebook";
-  if (text.includes("twitter") || text.includes("x")) return "Twitter/X";
+  // 🔥 EXTENDED KEYWORDS (THIS FIXES YOUR ISSUE)
+  if (
+    text.includes("instagram") ||
+    text.includes("ig ")
+  ) return "Instagram";
+
+  if (
+    text.includes("tiktok") ||
+    text.includes("tik tok")
+  ) return "TikTok";
+
+  if (
+    text.includes("youtube") ||
+    text.includes("yt ")
+  ) return "YouTube";
+
+  if (
+    text.includes("facebook") ||
+    text.includes("fb ")
+  ) return "Facebook";
+
+  if (
+    text.includes("twitter") ||
+    text.includes("tweet") ||
+    text.includes("x.com")
+  ) return "Twitter/X";
+
+  if (text.includes("telegram")) return "Telegram";
+  if (text.includes("whatsapp")) return "WhatsApp";
+  if (text.includes("spotify")) return "Spotify";
+  if (text.includes("threads")) return "Threads";
 
   return "Other";
 }
@@ -147,7 +173,6 @@ app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
-    // FETCH IF EMPTY
     if (!services.length) {
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url, { timeout: 20000 });
@@ -160,34 +185,20 @@ app.get("/api/services", async (req, res) => {
         const pricing = applyFinalPrice(s.rate, safeName);
 
         return {
-          serviceId: String(s.service || s.id || `srv_${i}`), // ✅ NEVER undefined
+          serviceId: String(s.service || s.id || `srv_${i}`),
           name: safeName,
           baseRate: pricing.baseRate,
           rate: pricing.rate,
           min: Number(s.min || 1),
           max: Number(s.max || 10000),
           category: s.category || "Other",
-          platform: detectPlatform(s)
+          platform: detectPlatform(s) // ✅ NOW WORKS PROPERLY
         };
       });
 
       await Service.deleteMany({});
       await Service.insertMany(services);
     }
-
-    // 🔥 FIX OLD DATA
-    services = services.map((s, i) => {
-      const safeName = cleanName(s.name);
-      const pricing = applyFinalPrice(s.baseRate || s.rate, safeName);
-
-      return {
-        ...s,
-        serviceId: String(s.serviceId || `srv_${i}`),
-        name: safeName,
-        baseRate: pricing.baseRate,
-        rate: pricing.rate
-      };
-    });
 
     // GROUP
     const grouped = {};
@@ -222,7 +233,7 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    const cost = calculateCost(service.rate, quantity); // ✅ USE FINAL PRICE
+    const cost = calculateCost(service.rate, quantity);
 
     const user = await User.findById(req.user.id);
 
