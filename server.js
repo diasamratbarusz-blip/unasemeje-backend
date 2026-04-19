@@ -46,33 +46,41 @@ function auth(req, res, next) {
 function cleanName(name = "") {
   return String(name || "")
     .replace(/^TTF\d+\s*/i, "")
-    .replace(/^TTV\d+\s*/i, "")
+    .replace(/^TTV\d+\s*/i)
     .replace(/^TTL\d+\s*/i, "")
     .replace(/\[.*?\]/g, "")
     .trim() || "Service";
 }
 
-// ================= PLATFORM DETECTION =================
+// ================= FIXED PLATFORM DETECTION =================
 function detectPlatform(service = {}) {
   const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
 
+  // 🔥 MORE ACCURATE DETECTION (FIXED)
   if (text.includes("instagram")) return "Instagram";
-  if (text.includes("tiktok")) return "TikTok";
-  if (text.includes("youtube")) return "YouTube";
-  if (text.includes("facebook")) return "Facebook";
-  if (text.includes("twitter") || text.includes("x")) return "Twitter/X";
+  if (text.includes("ig ") || text.includes("ig-") || text.includes("insta")) return "Instagram";
+
+  if (text.includes("tiktok") || text.includes("tik tok")) return "TikTok";
+
+  if (text.includes("youtube") || text.includes("yt ")) return "YouTube";
+
+  if (text.includes("facebook") || text.includes("fb ")) return "Facebook";
+
+  if (text.includes("twitter") || text.includes("x followers") || text.includes("x views")) return "Twitter/X";
+
+  if (text.includes("telegram")) return "Telegram";
 
   return "Other";
 }
 
-// ================= MARKUP SYSTEM =================
+// ================= MARKUP =================
 function getMarkup(name = "") {
   const text = String(name).toLowerCase();
 
   if (text.includes("like")) return 30;
   if (text.includes("follower")) return 20;
   if (text.includes("view")) return 40;
-  if (text.includes("save") || text.includes("saved")) return 40;
+  if (text.includes("save")) return 40;
 
   return 40;
 }
@@ -87,14 +95,11 @@ function applyProviderRate(rate) {
 }
 
 function applyFinalPrice(rate, name) {
-  const providerPrice = applyProviderRate(rate);
+  const provider = applyProviderRate(rate);
   const markup = getMarkup(name);
 
-  const final = providerPrice + markup;
-
   return {
-    // IMPORTANT: provider price is NEVER sent to frontend
-    rate: Number(final.toFixed(2))
+    rate: Number((provider + markup).toFixed(2))
   };
 }
 
@@ -141,11 +146,12 @@ app.get("/api/me", auth, async (req, res) => {
   res.json(user);
 });
 
-// ================= SERVICES (FIXED PRICE LEAK) =================
+// ================= SERVICES (FIXED PLATFORM + CLICK READY) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
+    // FETCH IF EMPTY
     if (!services.length) {
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url, { timeout: 20000 });
@@ -154,20 +160,17 @@ app.get("/api/services", async (req, res) => {
       const list = Array.isArray(raw) ? raw : Object.values(raw || {});
 
       services = list.map((s, i) => {
-        const safeName = cleanName(s.name);
+        const name = cleanName(s.name);
 
-        const finalPrice = applyFinalPrice(s.rate, safeName);
+        const final = applyFinalPrice(s.rate, name);
 
         return {
-          serviceId: String(s.service || s.id || `srv_${i}`),
-          name: safeName,
-
-          // 🔥 ONLY FINAL PRICE SENT
-          rate: finalPrice.rate,
-
+          serviceId: String(s.service || s.id || `srv_${i}`), // FIXED SAFE ID
+          name,
+          rate: final.rate,
           min: Number(s.min || 1),
           max: Number(s.max || 10000),
-          category: s.category || "Other",
+          category: s.category || "General",
           platform: detectPlatform(s)
         };
       });
@@ -176,20 +179,15 @@ app.get("/api/services", async (req, res) => {
       await Service.insertMany(services);
     }
 
-    // FIX OLD DATA AGAIN (SAFETY)
-    services = services.map((s, i) => {
-      const safeName = cleanName(s.name);
-      const finalPrice = applyFinalPrice(s.rate, safeName);
+    // NORMALIZE AGAIN (SAFETY)
+    services = services.map((s, i) => ({
+      ...s,
+      serviceId: String(s.serviceId || `srv_${i}`),
+      name: cleanName(s.name),
+      rate: Number(s.rate || 0)
+    }));
 
-      return {
-        ...s,
-        serviceId: String(s.serviceId || `srv_${i}`),
-        name: safeName,
-        rate: finalPrice.rate // 🔥 FORCE FINAL PRICE
-      };
-    });
-
-    // GROUP SERVICES
+    // GROUPING FIXED
     const grouped = {};
 
     services.forEach(s => {
@@ -203,20 +201,20 @@ app.get("/api/services", async (req, res) => {
         serviceId: s.serviceId,
         name: s.name,
 
-        // 🔥 FRONTEND ONLY SEES THIS
-        rate: Number(s.rate || 0).toFixed(2)
+        // ONLY FINAL PRICE
+        rate: Number(s.rate).toFixed(2)
       });
     });
 
     res.json({ success: true, data: grouped });
 
   } catch (err) {
-    console.error(err);
+    console.error("SERVICE ERROR:", err.message);
     res.status(500).json({ error: "Services failed" });
   }
 });
 
-// ================= ORDER =================
+// ================= ORDER (CLICK READY FLOW) =================
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
