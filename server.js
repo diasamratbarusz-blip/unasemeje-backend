@@ -23,7 +23,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ================= DB =================
+// ================= CONNECT DB =================
 connectDB();
 log("Server starting...");
 
@@ -52,54 +52,16 @@ function cleanName(name = "") {
     .trim() || "Service";
 }
 
-// ================= 🔥 FIXED PLATFORM DETECTION =================
+// ================= 🔥 STRONG PLATFORM DETECTION =================
 function detectPlatform(service = {}) {
-  const text = `
-    ${service.name || ""}
-    ${service.category || ""}
-    ${service.type || ""}
-    ${service.service || ""}
-  `.toLowerCase();
+  const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
 
-  // Instagram (expanded detection)
-  if (
-    text.includes("instagram") ||
-    text.includes("insta") ||
-    text.includes("ig") ||
-    text.includes("instagram followers") ||
-    text.includes("instagram likes")
-  ) return "Instagram";
-
-  // TikTok
-  if (
-    text.includes("tiktok") ||
-    text.includes("tik tok") ||
-    text.includes("tt followers")
-  ) return "TikTok";
-
-  // YouTube
-  if (
-    text.includes("youtube") ||
-    text.includes("yt") ||
-    text.includes("subscribers")
-  ) return "YouTube";
-
-  // Facebook
-  if (
-    text.includes("facebook") ||
-    text.includes("fb") ||
-    text.includes("page likes")
-  ) return "Facebook";
-
-  // Twitter / X
-  if (
-    text.includes("twitter") ||
-    text.includes("x followers") ||
-    text.includes("x views")
-  ) return "Twitter/X";
-
-  // Telegram
-  if (text.includes("telegram") || text.includes("tg")) return "Telegram";
+  if (/(instagram|insta|ig)/.test(text)) return "Instagram";
+  if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
+  if (/(youtube|yt|subscriber)/.test(text)) return "YouTube";
+  if (/(facebook|fb)/.test(text)) return "Facebook";
+  if (/(twitter|x )/.test(text)) return "Twitter/X";
+  if (/(telegram|tg)/.test(text)) return "Telegram";
 
   return "Other";
 }
@@ -116,7 +78,7 @@ function getMarkup(name = "") {
   return 40;
 }
 
-// ================= PRICE =================
+// ================= PRICE ENGINE =================
 function applyProviderRate(rate) {
   rate = Number(rate || 0);
 
@@ -129,9 +91,7 @@ function applyFinalPrice(rate, name) {
   const provider = applyProviderRate(rate);
   const markup = getMarkup(name);
 
-  return {
-    rate: Number((provider + markup).toFixed(2))
-  };
+  return Number((provider + markup).toFixed(2));
 }
 
 // ================= COST =================
@@ -177,47 +137,53 @@ app.get("/api/me", auth, async (req, res) => {
   res.json(user);
 });
 
-// ================= SERVICES (FIXED GROUPING) =================
+// ================= SERVICES =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
+    // ================= FETCH IF EMPTY =================
     if (!services.length) {
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url, { timeout: 20000 });
 
-      const raw = response.data;
-      const list = Array.isArray(raw) ? raw : Object.values(raw || {});
+      let raw = response.data;
 
-      services = list.map((s, i) => {
-        const name = cleanName(s.name);
+      // 🔥 FLATTEN DATA (IMPORTANT FIX)
+      const list = Array.isArray(raw)
+        ? raw
+        : Object.values(raw || {}).flat();
 
-        const final = applyFinalPrice(s.rate, name);
-
-        return {
-          serviceId: String(s.service || s.id || `srv_${i}`),
-          name,
-          rate: final.rate,
-          min: Number(s.min || 1),
-          max: Number(s.max || 10000),
-          category: s.category || "General",
-          platform: detectPlatform(s)
-        };
-      });
+      services = list.map((s, i) => ({
+        serviceId: String(s.service || s.id || `srv_${i}`),
+        name: cleanName(s.name),
+        rate: Number(s.rate || 0),
+        min: Number(s.min || 1),
+        max: Number(s.max || 10000),
+        category: s.category || "General"
+      }));
 
       await Service.deleteMany({});
       await Service.insertMany(services);
     }
 
-    // FORCE FIX PLATFORM ON OLD DATA
-    services = services.map(s => ({
-      ...s,
-      platform: detectPlatform(s),
-      name: cleanName(s.name),
-      rate: Number(s.rate || 0)
-    }));
+    // ================= 🔥 FORCE FIX EVERYTHING =================
+    services = services.map((s, i) => {
+      const clean = cleanName(s.name);
+      const finalPrice = applyFinalPrice(s.rate, clean);
 
-    // GROUPING (FIXED)
+      return {
+        serviceId: String(s.serviceId || `srv_${i}`),
+        name: clean,
+        rate: finalPrice,
+        min: s.min,
+        max: s.max,
+        category: s.category || "General",
+        platform: detectPlatform(s)
+      };
+    });
+
+    // ================= GROUP =================
     const grouped = {};
 
     for (const s of services) {
@@ -230,7 +196,9 @@ app.get("/api/services", async (req, res) => {
       grouped[platform][category].push({
         serviceId: s.serviceId,
         name: s.name,
-        rate: Number(s.rate).toFixed(2)
+        rate: Number(s.rate).toFixed(2),
+        min: s.min,
+        max: s.max
       });
     }
 
@@ -253,7 +221,9 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    const cost = calculateCost(service.rate, quantity);
+    // 🔥 ALWAYS USE FINAL PRICE
+    const finalRate = applyFinalPrice(service.rate, service.name);
+    const cost = calculateCost(finalRate, quantity);
 
     const user = await User.findById(req.user.id);
 
