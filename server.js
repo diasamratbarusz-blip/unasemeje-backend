@@ -44,12 +44,12 @@ function auth(req, res, next) {
 
 // ================= CLEAN NAME =================
 function cleanName(name = "") {
-  return name
+  return String(name || "Service")
     .replace(/^TTF\d+\s*/i, "")
     .replace(/^TTV\d+\s*/i, "")
     .replace(/^TTL\d+\s*/i, "")
     .replace(/\[.*?\]/g, "")
-    .trim();
+    .trim() || "Service";
 }
 
 // ================= PLATFORM DETECTION =================
@@ -65,9 +65,9 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ================= MARKUP SYSTEM =================
+// ================= MARKUP =================
 function getMarkup(name = "") {
-  const text = name.toLowerCase();
+  const text = String(name).toLowerCase();
 
   if (text.includes("like")) return 30;
   if (text.includes("follower")) return 20;
@@ -77,8 +77,10 @@ function getMarkup(name = "") {
   return 40;
 }
 
-// ================= PROFIT SYSTEM =================
+// ================= PROVIDER PROFIT =================
 function applyProviderRate(rate) {
+  rate = Number(rate || 0);
+
   if (rate < 50) return rate * 1.8;
   if (rate < 200) return rate * 1.5;
   return rate * 1.3;
@@ -90,14 +92,14 @@ function applyFinalPrice(rate, name) {
   const markup = getMarkup(name);
 
   return {
-    baseRate: providerPrice,
-    rate: providerPrice + markup
+    baseRate: Number(providerPrice.toFixed(2)),
+    rate: Number((providerPrice + markup).toFixed(2))
   };
 }
 
-// ================= COST CALC =================
+// ================= COST =================
 function calculateCost(rate, qty) {
-  return (rate / 1000) * Number(qty);
+  return (Number(rate || 0) / 1000) * Number(qty || 0);
 }
 
 // ================= ROOT =================
@@ -143,7 +145,7 @@ app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
-    // ================= FETCH FROM PROVIDER =================
+    // FETCH IF EMPTY
     if (!services.length) {
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url, { timeout: 20000 });
@@ -152,11 +154,12 @@ app.get("/api/services", async (req, res) => {
       const list = Array.isArray(raw) ? raw : Object.values(raw || {});
 
       services = list.map(s => {
-        const pricing = applyFinalPrice(Number(s.rate || 0), s.name || "");
+        const safeName = cleanName(s.name);
+        const pricing = applyFinalPrice(s.rate, safeName);
 
         return {
-          serviceId: String(s.service || s.id),
-          name: cleanName(s.name || "Service"),
+          serviceId: String(s.service || s.id || Math.random()),
+          name: safeName,
           baseRate: pricing.baseRate,
           rate: pricing.rate,
           min: Number(s.min || 1),
@@ -170,22 +173,19 @@ app.get("/api/services", async (req, res) => {
       await Service.insertMany(services);
     }
 
-    // ================= 🔥 CRITICAL FIX =================
-    // ALWAYS re-apply markup before sending to frontend
+    // 🔥 FIX: ENSURE NO UNDEFINED
     services = services.map(s => {
-      const pricing = applyFinalPrice(
-        Number(s.baseRate || s.rate || 0),
-        s.name
-      );
+      const safeName = cleanName(s.name);
+      const pricing = applyFinalPrice(s.baseRate || s.rate, safeName);
 
       return {
         ...s,
+        name: safeName,
         baseRate: pricing.baseRate,
         rate: pricing.rate
       };
     });
 
-    // ================= GROUP =================
     const grouped = {};
 
     services.forEach(s => {
@@ -196,9 +196,9 @@ app.get("/api/services", async (req, res) => {
       if (!grouped[platform][category]) grouped[platform][category] = [];
 
       grouped[platform][category].push({
-        serviceId: s.serviceId,
-        name: s.name,
-        rate: Number(s.rate).toFixed(2) // ✅ ONLY FINAL PRICE SENT
+        serviceId: s.serviceId || "0",
+        name: s.name || "Service",
+        rate: Number(s.rate || 0).toFixed(2)
       });
     });
 
@@ -218,7 +218,6 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    // ✅ USE FINAL PRICE (NOT BASE)
     const cost = calculateCost(service.rate, quantity);
 
     const user = await User.findById(req.user.id);
@@ -260,9 +259,9 @@ app.get("/api/orders", auth, async (req, res) => {
 app.post("/api/deposit", auth, async (req, res) => {
   const { message } = req.body;
 
-  const code = message.match(/[A-Z0-9]{8,12}/)?.[0];
-  const amount = message.match(/Ksh\s?([\d,]+)/i)?.[1];
-  const phone = message.match(/(\d{10,12})/)?.[0];
+  const code = message?.match(/[A-Z0-9]{8,12}/)?.[0];
+  const amount = message?.match(/Ksh\s?([\d,]+)/i)?.[1];
+  const phone = message?.match(/(\d{10,12})/)?.[0];
 
   if (!code) return res.status(400).json({ error: "Invalid message" });
 
@@ -272,7 +271,7 @@ app.post("/api/deposit", auth, async (req, res) => {
   await Deposit.create({
     userId: req.user.id,
     phone,
-    amount: Number(amount),
+    amount: Number(amount || 0),
     transactionCode: code,
     message,
     status: "pending"
