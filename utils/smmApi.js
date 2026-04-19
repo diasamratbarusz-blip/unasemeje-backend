@@ -18,6 +18,19 @@ if (!API_URL) {
 // ================= DEBUG MODE =================
 const DEBUG = true;
 
+// ================= SAFE NORMALIZER =================
+function normalizeResponse(data) {
+  if (!data) return [];
+
+  if (Array.isArray(data)) return data;
+
+  if (typeof data === "object") {
+    return Object.values(data).flat();
+  }
+
+  return [];
+}
+
 // ================= CORE REQUEST =================
 async function request(params) {
   if (!API_KEY || !API_URL) {
@@ -36,7 +49,7 @@ async function request(params) {
 
     if (DEBUG) {
       console.log("📡 SMM REQUEST:", params);
-      console.log("📥 SMM RESPONSE:", res.data);
+      console.log("📥 SMM RESPONSE TYPE:", typeof res.data);
     }
 
     return res.data;
@@ -53,12 +66,22 @@ async function request(params) {
 async function getServices() {
   const data = await request({ action: "services" });
 
-  if (!data || !Array.isArray(data)) {
-    console.error("❌ Invalid services response from provider");
+  const services = normalizeResponse(data);
+
+  if (!services.length) {
+    console.error("❌ Invalid or empty services response from provider");
     return [];
   }
 
-  return data;
+  // SAFE MAP (prevents undefined crashes)
+  return services.map((s, i) => ({
+    serviceId: String(s.service || s.id || `srv_${i}`),
+    name: s.name || "Unnamed Service",
+    rate: Number(s.rate || 0),
+    min: Number(s.min || 1),
+    max: Number(s.max || 10000),
+    category: s.category || "Other"
+  }));
 }
 
 // ================= CREATE ORDER =================
@@ -115,6 +138,15 @@ async function cancel(order) {
   });
 }
 
+// ================= HEALTH CHECK =================
+async function testConnection() {
+  const res = await request({ action: "balance" });
+
+  if (!res) return false;
+
+  return true;
+}
+
 // ================= EXPORTS =================
 module.exports = {
   getServices,
@@ -123,5 +155,6 @@ module.exports = {
   getMultipleStatus,
   getBalance,
   refill,
-  cancel
+  cancel,
+  testConnection
 };
