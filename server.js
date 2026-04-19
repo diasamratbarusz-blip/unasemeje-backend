@@ -81,19 +81,39 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ================= PROFIT SYSTEM =================
-function getProfit(rate) {
-  if (rate < 50) return 1.8;
-  if (rate < 200) return 1.5;
-  return 1.3;
+// ================= MARKUP SYSTEM (ADDED) =================
+function getMarkup(name = "") {
+  const text = name.toLowerCase();
+
+  if (text.includes("like")) return 30;
+  if (text.includes("follower")) return 20; // corrected
+  if (text.includes("view")) return 40;
+  if (text.includes("save") || text.includes("saved")) return 40;
+
+  return 40; // default
 }
 
+// ================= APPLY PROFIT + MARKUP =================
 function applyProfit(rate) {
-  return Number((rate * getProfit(rate)).toFixed(2));
+  if (rate < 50) return rate * 1.8;
+  if (rate < 200) return rate * 1.5;
+  return rate * 1.3;
 }
 
+// FINAL PRICE (BASE + MARKUP SYSTEM)
+function applyFinalPrice(baseRate, name) {
+  const providerPrice = applyProfit(baseRate);
+  const markup = getMarkup(name);
+
+  return {
+    baseRate: providerPrice,
+    rate: Number(providerPrice + markup)
+  };
+}
+
+// ================= COST =================
 function calculateCost(rate, qty) {
-  return (applyProfit(rate) / 1000) * Number(qty);
+  return (rate / 1000) * Number(qty);
 }
 
 // ================= ROOT =================
@@ -101,45 +121,11 @@ app.get("/", (req, res) => {
   res.send("🚀 Backend running successfully");
 });
 
-// ================= AUTH =================
-app.post("/api/register", async (req, res) => {
-  const { email, password, phone } = req.body;
-
-  const exists = await User.findOne({ email });
-  if (exists) return res.status(400).json({ error: "User already exists" });
-
-  await User.create({ email, password, phone });
-
-  res.json({ message: "Registered successfully" });
-});
-
-app.post("/api/login", async (req, res) => {
-  const { email, password } = req.body;
-
-  const user = await User.findOne({ email, password });
-  if (!user) return res.status(400).json({ error: "Invalid credentials" });
-
-  const token = jwt.sign(
-    { id: user._id, role: user.role, email: user.email },
-    process.env.JWT_SECRET,
-    { expiresIn: "7d" }
-  );
-
-  res.json({ token });
-});
-
-// ================= USER =================
-app.get("/api/me", auth, async (req, res) => {
-  const user = await User.findById(req.user.id);
-  res.json(user);
-});
-
-// ================= SERVICES (FIXED + GUARANTEED DISPLAY) =================
+// ================= SERVICES (UPDATED WITH MARKUP) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
-    // IF EMPTY → FETCH FROM PROVIDER
     if (!services.length) {
       console.log("⚠️ Fetching services from provider...");
 
@@ -149,25 +135,33 @@ app.get("/api/services", async (req, res) => {
       const raw = response.data;
       const list = Array.isArray(raw) ? raw : Object.values(raw || {});
 
-      services = list.map(s => ({
-        serviceId: String(s.service || s.id),
-        name: cleanName(s.name || "Service"),
-        baseRate: Number(s.rate || 0),
-        rate: applyProfit(Number(s.rate || 0)),
-        min: Number(s.min || 1),
-        max: Number(s.max || 10000),
-        category: s.category || "Other",
-        platform: detectPlatform({
-          name: s.name,
-          category: s.category
-        })
-      }));
+      services = list.map(s => {
+        const pricing = applyFinalPrice(Number(s.rate || 0), s.name || "");
+
+        return {
+          serviceId: String(s.service || s.id),
+          name: cleanName(s.name || "Service"),
+
+          // 🔥 PROVIDER PRICE (after provider profit)
+          baseRate: pricing.baseRate,
+
+          // 🔥 FINAL USER PRICE (with YOUR markup)
+          rate: pricing.rate,
+
+          min: Number(s.min || 1),
+          max: Number(s.max || 10000),
+          category: s.category || "Other",
+          platform: detectPlatform({
+            name: s.name,
+            category: s.category
+          })
+        };
+      });
 
       await Service.deleteMany({});
       await Service.insertMany(services);
     }
 
-    // GROUP SERVICES (FRONTEND READY)
     const grouped = {};
 
     services.forEach(s => {
@@ -181,6 +175,7 @@ app.get("/api/services", async (req, res) => {
         serviceId: s.serviceId,
         name: s.name,
         rate: Number(s.rate).toFixed(2),
+        baseRate: s.baseRate,
         min: s.min,
         max: s.max
       });
@@ -236,7 +231,6 @@ app.post("/api/order", auth, async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Order failed" });
   }
 });
@@ -247,7 +241,7 @@ app.get("/api/orders", auth, async (req, res) => {
   res.json(orders);
 });
 
-// ================= START SERVER =================
+// ================= START =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
