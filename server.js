@@ -7,6 +7,7 @@ const mongoose = require("mongoose");
 const axios = require("axios");
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
@@ -85,7 +86,7 @@ app.post("/api/register", async (req, res) => {
   const { email, password, phone } = req.body;
 
   const exists = await User.findOne({ email });
-  if (exists) return res.json({ error: "User exists" });
+  if (exists) return res.status(400).json({ error: "User exists" });
 
   await User.create({ email, password, phone });
 
@@ -96,7 +97,7 @@ app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
 
   const user = await User.findOne({ email, password });
-  if (!user) return res.json({ error: "Invalid login" });
+  if (!user) return res.status(400).json({ error: "Invalid login" });
 
   const token = jwt.sign(
     { id: user._id, email: user.email },
@@ -112,7 +113,7 @@ app.get("/api/me", auth, async (req, res) => {
   res.json(user);
 });
 
-/* ================= M-PESA PARSER (IMPROVED) ================= */
+/* ================= M-PESA PARSER ================= */
 function extractMpesa(message) {
   const code = message.match(/[A-Z0-9]{8,12}/)?.[0];
   const amount = message.match(/Ksh\s?([\d,]+)/i)?.[1];
@@ -125,7 +126,7 @@ function extractMpesa(message) {
   };
 }
 
-/* ================= DEPOSIT SUBMIT (FIXED) ================= */
+/* ================= DEPOSIT ================= */
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { message } = req.body;
@@ -136,7 +137,6 @@ app.post("/api/deposit", auth, async (req, res) => {
       return res.status(400).json({ error: "Invalid M-Pesa message" });
     }
 
-    // prevent duplicates
     const exists = await Deposit.findOne({ transactionCode: data.code });
     if (exists) {
       return res.status(400).json({ error: "Transaction already used" });
@@ -147,12 +147,11 @@ app.post("/api/deposit", auth, async (req, res) => {
       phone: data.phone,
       amount: data.amount,
       transactionCode: data.code,
-      message,            // FIXED FIELD NAME (consistent)
-      status: "pending",
-      source: "manual"
+      message,              // FULL M-PESA MESSAGE STORED
+      status: "pending"
     });
 
-    res.json({ message: "Deposit submitted for approval" });
+    res.json({ message: "Deposit submitted successfully" });
 
   } catch (err) {
     console.error(err);
@@ -166,7 +165,7 @@ app.get("/api/admin/deposits", auth, adminOnly, async (req, res) => {
   res.json(deposits);
 });
 
-/* ================= ADMIN APPROVE ================= */
+/* ================= APPROVE DEPOSIT ================= */
 app.post("/api/admin/approve", auth, adminOnly, async (req, res) => {
   try {
     const { id } = req.body;
@@ -288,7 +287,6 @@ app.get("/api/orders", auth, async (req, res) => {
 
 /* ================= START ================= */
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log("🚀 Server running on", PORT);
 });
