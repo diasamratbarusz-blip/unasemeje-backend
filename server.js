@@ -48,12 +48,28 @@ function auth(req, res, next) {
   }
 }
 
-// ================= ADMIN CHECK =================
-function isAdmin(user) {
-  return (
-    user?.email === ADMIN_EMAIL ||
-    user?.phone === ADMIN_PHONE
-  );
+// ================= REFERRAL SYSTEM =================
+function generateReferralCode() {
+  return crypto.randomBytes(4).toString("hex");
+}
+
+async function giveReferralBonus(userId, amount) {
+  const user = await User.findById(userId);
+  if (!user || !user.referredBy) return;
+
+  const referrer = await User.findOne({
+    referralCode: user.referredBy
+  });
+
+  if (!referrer) return;
+
+  const bonus = amount * 0.10;
+
+  referrer.balance += bonus;
+  referrer.referralEarnings =
+    (referrer.referralEarnings || 0) + bonus;
+
+  await referrer.save();
 }
 
 // ================= CLEAN NAME =================
@@ -72,7 +88,7 @@ function detectPlatform(service = {}) {
 
   if (/(instagram|insta|ig)/.test(text)) return "Instagram";
   if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
-  if (/(youtube|yt)/.test(text)) return "YouTube";
+  if (/(youtube|yt|subscriber)/.test(text)) return "YouTube";
   if (/(facebook|fb)/.test(text)) return "Facebook";
   if (/(twitter|x)/.test(text)) return "Twitter/X";
   if (/(telegram|tg)/.test(text)) return "Telegram";
@@ -119,9 +135,9 @@ app.get("/", (req, res) => {
   res.send("🚀 Backend Running Successfully");
 });
 
-// ================= REGISTER =================
+// ================= REGISTER (WITH REFERRAL) =================
 app.post("/api/register", async (req, res) => {
-  const { email, password, phone } = req.body;
+  const { email, password, phone, referralCode } = req.body;
 
   const exists = await User.findOne({ email });
   if (exists) return res.status(400).json({ error: "User exists" });
@@ -130,8 +146,10 @@ app.post("/api/register", async (req, res) => {
     email,
     password,
     phone,
+    referralCode: generateReferralCode(),
+    referredBy: referralCode || null,
     balance: 0,
-    apiKey: null
+    referralEarnings: 0
   });
 
   res.json({ message: "Registered" });
@@ -145,7 +163,7 @@ app.post("/api/login", async (req, res) => {
   if (!user) return res.status(400).json({ error: "Invalid login" });
 
   const token = jwt.sign(
-    { id: user._id, email: user.email, phone: user.phone },
+    { id: user._id, email: user.email, role: user.role },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
@@ -161,7 +179,20 @@ app.get("/api/me", auth, async (req, res) => {
     email: user.email,
     phone: user.phone,
     balance: user.balance,
-    apiKey: user.apiKey || null
+    apiKey: user.apiKey || null,
+    referralCode: user.referralCode,
+    referralEarnings: user.referralEarnings || 0
+  });
+});
+
+// ================= REFERRAL INFO =================
+app.get("/api/referral", auth, async (req, res) => {
+  const user = await User.findById(req.user.id);
+
+  res.json({
+    referralCode: user.referralCode,
+    referredBy: user.referredBy,
+    earnings: user.referralEarnings || 0
   });
 });
 
@@ -252,6 +283,9 @@ app.post("/api/order", auth, async (req, res) => {
       cost
     });
 
+    // 🔥 REFERRAL BONUS TRIGGER
+    await giveReferralBonus(req.user.id, cost);
+
     res.json({
       message: "Order placed",
       order,
@@ -261,6 +295,12 @@ app.post("/api/order", auth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: "Order failed" });
   }
+});
+
+// ================= ORDERS =================
+app.get("/api/orders", auth, async (req, res) => {
+  const orders = await Order.find({ userId: req.user.id });
+  res.json(orders);
 });
 
 // ================= DEPOSIT =================
@@ -285,36 +325,14 @@ app.post("/api/deposit", auth, async (req, res) => {
     status: "pending"
   });
 
-  res.json({
-    message: "Your request is in progress you will get results shortly"
-  });
-});
-
-// ================= PASSWORD CHANGE =================
-app.post("/api/change-password", auth, async (req, res) => {
-  const { oldPassword, newPassword } = req.body;
-
-  const user = await User.findById(req.user.id);
-
-  if (!user) return res.status(404).json({ error: "User not found" });
-
-  if (user.password !== oldPassword) {
-    return res.status(400).json({ error: "Old password is wrong" });
-  }
-
-  user.password = newPassword;
-  await user.save();
-
-  res.json({ message: "Password updated successfully" });
+  res.json({ message: "Deposit submitted. Request is in progress." });
 });
 
 // ================= API KEY =================
 app.get("/api/api-key", auth, async (req, res) => {
   const user = await User.findById(req.user.id);
 
-  if (user.apiKey) {
-    return res.json({ apiKey: user.apiKey });
-  }
+  if (user.apiKey) return res.json({ apiKey: user.apiKey });
 
   const apiKey = crypto.randomBytes(24).toString("hex");
 
