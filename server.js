@@ -42,6 +42,14 @@ function auth(req, res, next) {
   }
 }
 
+// ================= ADMIN CHECK =================
+function isAdmin(req, res, next) {
+  if (req.user.role !== "admin") {
+    return res.status(403).json({ error: "Admin only" });
+  }
+  next();
+}
+
 // ================= CLEAN NAME =================
 function cleanName(name = "") {
   return String(name || "")
@@ -52,7 +60,7 @@ function cleanName(name = "") {
     .trim() || "Service";
 }
 
-// ================= 🔥 STRONG PLATFORM DETECTION =================
+// ================= PLATFORM =================
 function detectPlatform(service = {}) {
   const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
 
@@ -78,7 +86,7 @@ function getMarkup(name = "") {
   return 40;
 }
 
-// ================= PRICE ENGINE =================
+// ================= PRICE =================
 function applyProviderRate(rate) {
   rate = Number(rate || 0);
 
@@ -142,17 +150,13 @@ app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
-    // ================= FETCH IF EMPTY =================
     if (!services.length) {
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
-      const response = await axios.get(url, { timeout: 20000 });
+      const response = await axios.get(url);
 
-      let raw = response.data;
-
-      // 🔥 FLATTEN DATA (IMPORTANT FIX)
-      const list = Array.isArray(raw)
-        ? raw
-        : Object.values(raw || {}).flat();
+      const list = Array.isArray(response.data)
+        ? response.data
+        : Object.values(response.data || {}).flat();
 
       services = list.map((s, i) => ({
         serviceId: String(s.service || s.id || `srv_${i}`),
@@ -167,48 +171,34 @@ app.get("/api/services", async (req, res) => {
       await Service.insertMany(services);
     }
 
-    // ================= 🔥 FORCE FIX EVERYTHING =================
-    services = services.map((s, i) => {
-      const clean = cleanName(s.name);
-      const finalPrice = applyFinalPrice(s.rate, clean);
+    services = services.map(s => ({
+      ...s,
+      platform: detectPlatform(s),
+      name: cleanName(s.name),
+      rate: applyFinalPrice(s.rate, s.name)
+    }));
 
-      return {
-        serviceId: String(s.serviceId || `srv_${i}`),
-        name: clean,
-        rate: finalPrice,
-        min: s.min,
-        max: s.max,
-        category: s.category || "General",
-        platform: detectPlatform(s)
-      };
-    });
-
-    // ================= GROUP =================
     const grouped = {};
 
-    for (const s of services) {
-      const platform = s.platform || "Other";
-      const category = s.category || "General";
+    services.forEach(s => {
+      const p = s.platform || "Other";
+      const c = s.category || "General";
 
-      if (!grouped[platform]) grouped[platform] = {};
-      if (!grouped[platform][category]) grouped[platform][category] = [];
+      if (!grouped[p]) grouped[p] = {};
+      if (!grouped[p][c]) grouped[p][c] = [];
 
-      grouped[platform][category].push({
+      grouped[p][c].push({
         serviceId: s.serviceId,
         name: s.name,
         rate: Number(s.rate).toFixed(2),
         min: s.min,
         max: s.max
       });
-    }
-
-    res.json({
-      success: true,
-      data: grouped
     });
 
+    res.json({ success: true, data: grouped });
+
   } catch (err) {
-    console.error("SERVICES ERROR:", err.message);
     res.status(500).json({ error: "Services failed" });
   }
 });
@@ -221,7 +211,6 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    // 🔥 ALWAYS USE FINAL PRICE
     const finalRate = applyFinalPrice(service.rate, service.name);
     const cost = calculateCost(finalRate, quantity);
 
@@ -243,13 +232,9 @@ app.post("/api/order", auth, async (req, res) => {
       cost
     });
 
-    res.json({
-      message: "Order placed",
-      order,
-      balance: user.balance
-    });
+    res.json({ message: "Order placed", order, balance: user.balance });
 
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Order failed" });
   }
 });
@@ -266,7 +251,6 @@ app.post("/api/deposit", auth, async (req, res) => {
 
   const code = message?.match(/[A-Z0-9]{8,12}/)?.[0];
   const amount = message?.match(/Ksh\s?([\d,]+)/i)?.[1];
-  const phone = message?.match(/(\d{10,12})/)?.[0];
 
   if (!code) return res.status(400).json({ error: "Invalid message" });
 
@@ -275,7 +259,6 @@ app.post("/api/deposit", auth, async (req, res) => {
 
   await Deposit.create({
     userId: req.user.id,
-    phone,
     amount: Number(amount || 0),
     transactionCode: code,
     message,
@@ -283,6 +266,58 @@ app.post("/api/deposit", auth, async (req, res) => {
   });
 
   res.json({ message: "Deposit submitted" });
+});
+
+// ================= ADMIN =================
+
+// View all users
+app.get("/api/admin/users", auth, isAdmin, async (req, res) => {
+  const users = await User.find();
+  res.json(users);
+});
+
+// View deposits
+app.get("/api/admin/deposits", auth, isAdmin, async (req, res) => {
+  const deposits = await Deposit.find();
+  res.json(deposits);
+});
+
+// Approve deposit
+app.post("/api/admin/deposit/:id/approve", auth, isAdmin, async (req, res) => {
+  const dep = await Deposit.findById(req.params.id);
+  if (!dep) return res.status(404).json({ error: "Not found" });
+
+  if (dep.status === "approved") {
+    return res.status(400).json({ error: "Already approved" });
+  }
+
+  const user = await User.findById(dep.userId);
+
+  user.balance += dep.amount;
+  await user.save();
+
+  dep.status = "approved";
+  await dep.save();
+
+  res.json({ message: "Deposit approved" });
+});
+
+// Disable service
+app.post("/api/admin/service/:id/disable", auth, isAdmin, async (req, res) => {
+  await Service.updateOne(
+    { serviceId: req.params.id },
+    { status: "disabled" }
+  );
+  res.json({ message: "Service disabled" });
+});
+
+// Enable service
+app.post("/api/admin/service/:id/enable", auth, isAdmin, async (req, res) => {
+  await Service.updateOne(
+    { serviceId: req.params.id },
+    { status: "active" }
+  );
+  res.json({ message: "Service enabled" });
 });
 
 // ================= START =================
