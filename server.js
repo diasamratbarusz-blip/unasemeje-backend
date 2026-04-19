@@ -84,7 +84,7 @@ function applyProviderRate(rate) {
   return rate * 1.3;
 }
 
-// FINAL PRICE = PROVIDER + MARKUP
+// ================= FINAL PRICE =================
 function applyFinalPrice(rate, name) {
   const providerPrice = applyProviderRate(rate);
   const markup = getMarkup(name);
@@ -143,6 +143,7 @@ app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
 
+    // ================= FETCH FROM PROVIDER =================
     if (!services.length) {
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url, { timeout: 20000 });
@@ -156,10 +157,8 @@ app.get("/api/services", async (req, res) => {
         return {
           serviceId: String(s.service || s.id),
           name: cleanName(s.name || "Service"),
-
           baseRate: pricing.baseRate,
           rate: pricing.rate,
-
           min: Number(s.min || 1),
           max: Number(s.max || 10000),
           category: s.category || "Other",
@@ -171,6 +170,22 @@ app.get("/api/services", async (req, res) => {
       await Service.insertMany(services);
     }
 
+    // ================= 🔥 CRITICAL FIX =================
+    // ALWAYS re-apply markup before sending to frontend
+    services = services.map(s => {
+      const pricing = applyFinalPrice(
+        Number(s.baseRate || s.rate || 0),
+        s.name
+      );
+
+      return {
+        ...s,
+        baseRate: pricing.baseRate,
+        rate: pricing.rate
+      };
+    });
+
+    // ================= GROUP =================
     const grouped = {};
 
     services.forEach(s => {
@@ -183,8 +198,7 @@ app.get("/api/services", async (req, res) => {
       grouped[platform][category].push({
         serviceId: s.serviceId,
         name: s.name,
-        rate: Number(s.rate).toFixed(2),
-        baseRate: s.baseRate
+        rate: Number(s.rate).toFixed(2) // ✅ ONLY FINAL PRICE SENT
       });
     });
 
@@ -204,7 +218,8 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    const cost = calculateCost(service.baseRate, quantity);
+    // ✅ USE FINAL PRICE (NOT BASE)
+    const cost = calculateCost(service.rate, quantity);
 
     const user = await User.findById(req.user.id);
 
