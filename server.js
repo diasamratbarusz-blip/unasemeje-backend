@@ -48,7 +48,7 @@ function auth(req, res, next) {
   }
 }
 
-// ================= REFERRAL SYSTEM =================
+// ================= REFERRAL =================
 function generateReferralCode() {
   return crypto.randomBytes(4).toString("hex");
 }
@@ -57,17 +57,13 @@ async function giveReferralBonus(userId, amount) {
   const user = await User.findById(userId);
   if (!user || !user.referredBy) return;
 
-  const referrer = await User.findOne({
-    referralCode: user.referredBy
-  });
-
+  const referrer = await User.findOne({ referralCode: user.referredBy });
   if (!referrer) return;
 
   const bonus = amount * 0.10;
 
   referrer.balance += bonus;
-  referrer.referralEarnings =
-    (referrer.referralEarnings || 0) + bonus;
+  referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
 
   await referrer.save();
 }
@@ -82,13 +78,13 @@ function cleanName(name = "") {
     .trim() || "Service";
 }
 
-// ================= PLATFORM DETECTION =================
+// ================= PLATFORM =================
 function detectPlatform(service = {}) {
   const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
 
   if (/(instagram|insta|ig)/.test(text)) return "Instagram";
   if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
-  if (/(youtube|yt|subscriber)/.test(text)) return "YouTube";
+  if (/(youtube|yt)/.test(text)) return "YouTube";
   if (/(facebook|fb)/.test(text)) return "Facebook";
   if (/(twitter|x)/.test(text)) return "Twitter/X";
   if (/(telegram|tg)/.test(text)) return "Telegram";
@@ -96,39 +92,30 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ================= MARKUP =================
-function getMarkup(name = "") {
-  const text = String(name).toLowerCase();
+// ================= 🔥 YOUR ONLY PRICING SYSTEM =================
 
-  if (text.includes("like")) return 30;
-  if (text.includes("follower")) return 25;
-  if (text.includes("view")) return 35;
-  if (text.includes("comment")) return 40;
-  if (text.includes("save")) return 40;
+// ONLY MARKUP SYSTEM (NO PROVIDER LOGIC ANYWHERE)
+function getMarkup(name = "") {
+  const t = String(name).toLowerCase();
+
+  if (t.includes("like")) return 30;
+  if (t.includes("follower")) return 25;
+  if (t.includes("view")) return 35;
+  if (t.includes("comment")) return 40;
+  if (t.includes("save")) return 40;
 
   return 40;
 }
 
-// ================= PRICE ENGINE (FIXED) =================
-
-// provider cost (REAL API cost)
-function providerRate(rate) {
-  rate = Number(rate || 0);
-
-  if (rate < 50) return rate * 1.8;
-  if (rate < 200) return rate * 1.5;
-  return rate * 1.3;
-}
-
-// FINAL SELL PRICE (DISPLAY ONLY)
+// FINAL PRICE = RAW RATE + YOUR MARKUP ONLY
 function applyFinalPrice(rate, name) {
-  const base = providerRate(rate);
+  rate = Number(rate || 0);
   const markup = getMarkup(name);
 
-  return Number((base + markup).toFixed(2));
+  return Number((rate + markup).toFixed(2));
 }
 
-// REAL COST (USED FOR BALANCE)
+// COST FOR BALANCE (UNCHANGED SAFE FORMULA)
 function calculateCost(rate, qty) {
   return (Number(rate || 0) / 1000) * Number(qty || 0);
 }
@@ -138,7 +125,7 @@ app.get("/", (req, res) => {
   res.send("🚀 Backend Running Successfully");
 });
 
-// ================= REGISTER (WITH REFERRAL) =================
+// ================= REGISTER =================
 app.post("/api/register", async (req, res) => {
   const { email, password, phone, referralCode } = req.body;
 
@@ -188,17 +175,6 @@ app.get("/api/me", auth, async (req, res) => {
   });
 });
 
-// ================= REFERRAL INFO =================
-app.get("/api/referral", auth, async (req, res) => {
-  const user = await User.findById(req.user.id);
-
-  res.json({
-    referralCode: user.referralCode,
-    referredBy: user.referredBy,
-    earnings: user.referralEarnings || 0
-  });
-});
-
 // ================= SERVICES =================
 app.get("/api/services", async (req, res) => {
   try {
@@ -214,7 +190,7 @@ app.get("/api/services", async (req, res) => {
       services = list.map((s, i) => ({
         serviceId: String(s.service || s.id || `srv_${i}`),
         name: cleanName(s.name),
-        baseRate: Number(s.rate || 0),
+        rate: Number(s.rate || 0),
         min: Number(s.min || 1),
         max: Number(s.max || 10000),
         category: s.category || "General",
@@ -225,30 +201,27 @@ app.get("/api/services", async (req, res) => {
       await Service.insertMany(services);
     }
 
-    services = services.map((s, i) => ({
-      serviceId: String(s.serviceId || `srv_${i}`),
-      name: cleanName(s.name),
-
-      // 🔥 FIXED: separate display price vs base
-      rate: applyFinalPrice(s.baseRate || s.rate, s.name),
-      baseRate: s.baseRate || s.rate,
-
+    // 🔥 ONLY YOUR MARKUP PRICE IS USED HERE
+    const formatted = services.map(s => ({
+      serviceId: s.serviceId,
+      name: s.name,
+      rate: applyFinalPrice(s.rate, s.name), // ONLY SYSTEM
       min: s.min,
       max: s.max,
-      category: s.category || "General",
+      category: s.category,
       platform: detectPlatform(s)
     }));
 
     const grouped = {};
 
-    services.forEach(s => {
-      const platform = s.platform || "Other";
-      const category = s.category || "General";
+    formatted.forEach(s => {
+      const p = s.platform || "Other";
+      const c = s.category || "General";
 
-      if (!grouped[platform]) grouped[platform] = {};
-      if (!grouped[platform][category]) grouped[platform][category] = [];
+      if (!grouped[p]) grouped[p] = {};
+      if (!grouped[p][c]) grouped[p][c] = [];
 
-      grouped[platform][category].push({
+      grouped[p][c].push({
         serviceId: s.serviceId,
         name: s.name,
         rate: s.rate
@@ -270,8 +243,8 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    // 🔥 FIXED: always use baseRate for cost
-    const cost = calculateCost(service.baseRate || service.rate, quantity);
+    // 🔥 SAME PRICE SYSTEM USED (MARKUP ONLY)
+    const cost = calculateCost(service.rate, quantity);
 
     const user = await User.findById(req.user.id);
 
