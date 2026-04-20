@@ -2,6 +2,10 @@
 require("dotenv").config();
 
 const crypto = require("crypto");
+
+console.log("SMM_API_URL:", process.env.SMM_API_URL);
+console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
+
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
@@ -44,7 +48,7 @@ function auth(req, res, next) {
   }
 }
 
-// ================= REFERRAL =================
+// ================= REFERRAL SYSTEM =================
 function generateReferralCode() {
   return crypto.randomBytes(4).toString("hex");
 }
@@ -53,20 +57,24 @@ async function giveReferralBonus(userId, amount) {
   const user = await User.findById(userId);
   if (!user || !user.referredBy) return;
 
-  const referrer = await User.findOne({ referralCode: user.referredBy });
+  const referrer = await User.findOne({
+    referralCode: user.referredBy
+  });
+
   if (!referrer) return;
 
   const bonus = amount * 0.10;
 
   referrer.balance += bonus;
-  referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
+  referrer.referralEarnings =
+    (referrer.referralEarnings || 0) + bonus;
 
   await referrer.save();
 }
 
-// ================= HELPERS =================
+// ================= CLEAN NAME =================
 function cleanName(name = "") {
-  return String(name)
+  return String(name || "")
     .replace(/^TTF\d+\s*/i, "")
     .replace(/^TTV\d+\s*/i, "")
     .replace(/^TTL\d+\s*/i, "")
@@ -74,12 +82,13 @@ function cleanName(name = "") {
     .trim() || "Service";
 }
 
+// ================= PLATFORM DETECTION =================
 function detectPlatform(service = {}) {
   const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
 
   if (/(instagram|insta|ig)/.test(text)) return "Instagram";
   if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
-  if (/(youtube|yt)/.test(text)) return "YouTube";
+  if (/(youtube|yt|subscriber)/.test(text)) return "YouTube";
   if (/(facebook|fb)/.test(text)) return "Facebook";
   if (/(twitter|x)/.test(text)) return "Twitter/X";
   if (/(telegram|tg)/.test(text)) return "Telegram";
@@ -87,18 +96,7 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ================= PRICING ENGINE (FIXED) =================
-
-// provider base rate adjustment
-function applyProviderRate(rate) {
-  rate = Number(rate || 0);
-
-  if (rate < 50) return rate * 1.8;
-  if (rate < 200) return rate * 1.5;
-  return rate * 1.3;
-}
-
-// markup rules
+// ================= MARKUP =================
 function getMarkup(name = "") {
   const text = String(name).toLowerCase();
 
@@ -111,17 +109,28 @@ function getMarkup(name = "") {
   return 40;
 }
 
-// FINAL SELL PRICE (ONLY FOR DISPLAY)
-function getSellPrice(baseRate, name) {
-  const provider = applyProviderRate(baseRate);
-  const markup = getMarkup(name);
+// ================= PRICE ENGINE (FIXED) =================
 
-  return Number((provider + markup).toFixed(2));
+// provider cost (REAL API cost)
+function providerRate(rate) {
+  rate = Number(rate || 0);
+
+  if (rate < 50) return rate * 1.8;
+  if (rate < 200) return rate * 1.5;
+  return rate * 1.3;
 }
 
-// COST TO YOU (IMPORTANT FIX)
-function calculateCost(baseRate, qty) {
-  return (Number(baseRate || 0) / 1000) * Number(qty || 0);
+// FINAL SELL PRICE (DISPLAY ONLY)
+function applyFinalPrice(rate, name) {
+  const base = providerRate(rate);
+  const markup = getMarkup(name);
+
+  return Number((base + markup).toFixed(2));
+}
+
+// REAL COST (USED FOR BALANCE)
+function calculateCost(rate, qty) {
+  return (Number(rate || 0) / 1000) * Number(qty || 0);
 }
 
 // ================= ROOT =================
@@ -129,7 +138,7 @@ app.get("/", (req, res) => {
   res.send("🚀 Backend Running Successfully");
 });
 
-// ================= REGISTER =================
+// ================= REGISTER (WITH REFERRAL) =================
 app.post("/api/register", async (req, res) => {
   const { email, password, phone, referralCode } = req.body;
 
@@ -173,12 +182,24 @@ app.get("/api/me", auth, async (req, res) => {
     email: user.email,
     phone: user.phone,
     balance: user.balance,
+    apiKey: user.apiKey || null,
     referralCode: user.referralCode,
     referralEarnings: user.referralEarnings || 0
   });
 });
 
-// ================= SERVICES (FIXED - NO OVERWRITE BUG) =================
+// ================= REFERRAL INFO =================
+app.get("/api/referral", auth, async (req, res) => {
+  const user = await User.findById(req.user.id);
+
+  res.json({
+    referralCode: user.referralCode,
+    referredBy: user.referredBy,
+    earnings: user.referralEarnings || 0
+  });
+});
+
+// ================= SERVICES =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
@@ -190,42 +211,44 @@ app.get("/api/services", async (req, res) => {
       const raw = response.data;
       const list = Array.isArray(raw) ? raw : Object.values(raw || {}).flat();
 
-      const mapped = list.map((s, i) => ({
+      services = list.map((s, i) => ({
         serviceId: String(s.service || s.id || `srv_${i}`),
         name: cleanName(s.name),
-        baseRate: Number(s.rate || 0),   // 🔥 IMPORTANT FIX
+        baseRate: Number(s.rate || 0),
         min: Number(s.min || 1),
         max: Number(s.max || 10000),
         category: s.category || "General",
         platform: detectPlatform(s)
       }));
 
-      await Service.insertMany(mapped);
-      services = mapped;
+      await Service.deleteMany({});
+      await Service.insertMany(services);
     }
 
-    // DO NOT overwrite baseRate
-    const formatted = services.map(s => ({
-      serviceId: s.serviceId,
-      name: s.name,
-      rate: getSellPrice(s.baseRate || s.rate, s.name), // display only
-      baseRate: s.baseRate || s.rate, // keep original safe
+    services = services.map((s, i) => ({
+      serviceId: String(s.serviceId || `srv_${i}`),
+      name: cleanName(s.name),
+
+      // 🔥 FIXED: separate display price vs base
+      rate: applyFinalPrice(s.baseRate || s.rate, s.name),
+      baseRate: s.baseRate || s.rate,
+
       min: s.min,
       max: s.max,
-      category: s.category,
-      platform: s.platform
+      category: s.category || "General",
+      platform: detectPlatform(s)
     }));
 
     const grouped = {};
 
-    formatted.forEach(s => {
-      const p = s.platform || "Other";
-      const c = s.category || "General";
+    services.forEach(s => {
+      const platform = s.platform || "Other";
+      const category = s.category || "General";
 
-      if (!grouped[p]) grouped[p] = {};
-      if (!grouped[p][c]) grouped[p][c] = [];
+      if (!grouped[platform]) grouped[platform] = {};
+      if (!grouped[platform][category]) grouped[platform][category] = [];
 
-      grouped[p][c].push({
+      grouped[platform][category].push({
         serviceId: s.serviceId,
         name: s.name,
         rate: s.rate
@@ -239,7 +262,7 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// ================= ORDER (FIXED COST LOGIC) =================
+// ================= ORDER =================
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -247,7 +270,8 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    const cost = calculateCost(service.baseRate, quantity); // 🔥 FIXED
+    // 🔥 FIXED: always use baseRate for cost
+    const cost = calculateCost(service.baseRate || service.rate, quantity);
 
     const user = await User.findById(req.user.id);
 
@@ -278,6 +302,51 @@ app.post("/api/order", auth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: "Order failed" });
   }
+});
+
+// ================= ORDERS =================
+app.get("/api/orders", auth, async (req, res) => {
+  const orders = await Order.find({ userId: req.user.id });
+  res.json(orders);
+});
+
+// ================= DEPOSIT =================
+app.post("/api/deposit", auth, async (req, res) => {
+  const { message } = req.body;
+
+  const code = message?.match(/[A-Z0-9]{8,12}/)?.[0];
+  const amount = message?.match(/Ksh\s?([\d,]+)/i)?.[1];
+  const phone = message?.match(/(\d{10,12})/)?.[0];
+
+  if (!code) return res.status(400).json({ error: "Invalid message" });
+
+  const exists = await Deposit.findOne({ transactionCode: code });
+  if (exists) return res.status(400).json({ error: "Used transaction" });
+
+  await Deposit.create({
+    userId: req.user.id,
+    phone,
+    amount: Number(amount || 0),
+    transactionCode: code,
+    message,
+    status: "pending"
+  });
+
+  res.json({ message: "Deposit submitted. Request is in progress." });
+});
+
+// ================= API KEY =================
+app.get("/api/api-key", auth, async (req, res) => {
+  const user = await User.findById(req.user.id);
+
+  if (user.apiKey) return res.json({ apiKey: user.apiKey });
+
+  const apiKey = crypto.randomBytes(24).toString("hex");
+
+  user.apiKey = apiKey;
+  await user.save();
+
+  res.json({ apiKey });
 });
 
 // ================= START =================
