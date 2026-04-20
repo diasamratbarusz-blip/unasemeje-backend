@@ -2,10 +2,6 @@
 require("dotenv").config();
 
 const crypto = require("crypto");
-
-console.log("SMM_API_URL:", process.env.SMM_API_URL);
-console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
-
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
@@ -48,7 +44,7 @@ function auth(req, res, next) {
   }
 }
 
-// ================= REFERRAL SYSTEM =================
+// ================= REFERRAL =================
 function generateReferralCode() {
   return crypto.randomBytes(4).toString("hex");
 }
@@ -57,24 +53,20 @@ async function giveReferralBonus(userId, amount) {
   const user = await User.findById(userId);
   if (!user || !user.referredBy) return;
 
-  const referrer = await User.findOne({
-    referralCode: user.referredBy
-  });
-
+  const referrer = await User.findOne({ referralCode: user.referredBy });
   if (!referrer) return;
 
   const bonus = amount * 0.10;
 
   referrer.balance += bonus;
-  referrer.referralEarnings =
-    (referrer.referralEarnings || 0) + bonus;
+  referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
 
   await referrer.save();
 }
 
-// ================= CLEAN NAME =================
+// ================= HELPERS =================
 function cleanName(name = "") {
-  return String(name || "")
+  return String(name)
     .replace(/^TTF\d+\s*/i, "")
     .replace(/^TTV\d+\s*/i, "")
     .replace(/^TTL\d+\s*/i, "")
@@ -82,13 +74,12 @@ function cleanName(name = "") {
     .trim() || "Service";
 }
 
-// ================= PLATFORM DETECTION =================
 function detectPlatform(service = {}) {
   const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
 
   if (/(instagram|insta|ig)/.test(text)) return "Instagram";
   if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
-  if (/(youtube|yt|subscriber)/.test(text)) return "YouTube";
+  if (/(youtube|yt)/.test(text)) return "YouTube";
   if (/(facebook|fb)/.test(text)) return "Facebook";
   if (/(twitter|x)/.test(text)) return "Twitter/X";
   if (/(telegram|tg)/.test(text)) return "Telegram";
@@ -96,7 +87,18 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ================= MARKUP =================
+// ================= PRICING ENGINE (FIXED) =================
+
+// provider base rate adjustment
+function applyProviderRate(rate) {
+  rate = Number(rate || 0);
+
+  if (rate < 50) return rate * 1.8;
+  if (rate < 200) return rate * 1.5;
+  return rate * 1.3;
+}
+
+// markup rules
 function getMarkup(name = "") {
   const text = String(name).toLowerCase();
 
@@ -109,25 +111,17 @@ function getMarkup(name = "") {
   return 40;
 }
 
-// ================= PRICE ENGINE =================
-function applyProviderRate(rate) {
-  rate = Number(rate || 0);
-
-  if (rate < 50) return rate * 1.8;
-  if (rate < 200) return rate * 1.5;
-  return rate * 1.3;
-}
-
-function applyFinalPrice(rate, name) {
-  const provider = applyProviderRate(rate);
+// FINAL SELL PRICE (ONLY FOR DISPLAY)
+function getSellPrice(baseRate, name) {
+  const provider = applyProviderRate(baseRate);
   const markup = getMarkup(name);
 
   return Number((provider + markup).toFixed(2));
 }
 
-// ================= COST =================
-function calculateCost(rate, qty) {
-  return (Number(rate || 0) / 1000) * Number(qty || 0);
+// COST TO YOU (IMPORTANT FIX)
+function calculateCost(baseRate, qty) {
+  return (Number(baseRate || 0) / 1000) * Number(qty || 0);
 }
 
 // ================= ROOT =================
@@ -135,7 +129,7 @@ app.get("/", (req, res) => {
   res.send("🚀 Backend Running Successfully");
 });
 
-// ================= REGISTER (WITH REFERRAL) =================
+// ================= REGISTER =================
 app.post("/api/register", async (req, res) => {
   const { email, password, phone, referralCode } = req.body;
 
@@ -179,24 +173,12 @@ app.get("/api/me", auth, async (req, res) => {
     email: user.email,
     phone: user.phone,
     balance: user.balance,
-    apiKey: user.apiKey || null,
     referralCode: user.referralCode,
     referralEarnings: user.referralEarnings || 0
   });
 });
 
-// ================= REFERRAL INFO =================
-app.get("/api/referral", auth, async (req, res) => {
-  const user = await User.findById(req.user.id);
-
-  res.json({
-    referralCode: user.referralCode,
-    referredBy: user.referredBy,
-    earnings: user.referralEarnings || 0
-  });
-});
-
-// ================= SERVICES =================
+// ================= SERVICES (FIXED - NO OVERWRITE BUG) =================
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
@@ -208,40 +190,42 @@ app.get("/api/services", async (req, res) => {
       const raw = response.data;
       const list = Array.isArray(raw) ? raw : Object.values(raw || {}).flat();
 
-      services = list.map((s, i) => ({
+      const mapped = list.map((s, i) => ({
         serviceId: String(s.service || s.id || `srv_${i}`),
         name: cleanName(s.name),
-        rate: Number(s.rate || 0),
+        baseRate: Number(s.rate || 0),   // 🔥 IMPORTANT FIX
         min: Number(s.min || 1),
         max: Number(s.max || 10000),
         category: s.category || "General",
         platform: detectPlatform(s)
       }));
 
-      await Service.deleteMany({});
-      await Service.insertMany(services);
+      await Service.insertMany(mapped);
+      services = mapped;
     }
 
-    services = services.map((s, i) => ({
-      serviceId: String(s.serviceId || `srv_${i}`),
-      name: cleanName(s.name),
-      rate: applyFinalPrice(s.rate, s.name),
+    // DO NOT overwrite baseRate
+    const formatted = services.map(s => ({
+      serviceId: s.serviceId,
+      name: s.name,
+      rate: getSellPrice(s.baseRate || s.rate, s.name), // display only
+      baseRate: s.baseRate || s.rate, // keep original safe
       min: s.min,
       max: s.max,
-      category: s.category || "General",
-      platform: detectPlatform(s)
+      category: s.category,
+      platform: s.platform
     }));
 
     const grouped = {};
 
-    services.forEach(s => {
-      const platform = s.platform || "Other";
-      const category = s.category || "General";
+    formatted.forEach(s => {
+      const p = s.platform || "Other";
+      const c = s.category || "General";
 
-      if (!grouped[platform]) grouped[platform] = {};
-      if (!grouped[platform][category]) grouped[platform][category] = [];
+      if (!grouped[p]) grouped[p] = {};
+      if (!grouped[p][c]) grouped[p][c] = [];
 
-      grouped[platform][category].push({
+      grouped[p][c].push({
         serviceId: s.serviceId,
         name: s.name,
         rate: s.rate
@@ -255,7 +239,7 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// ================= ORDER =================
+// ================= ORDER (FIXED COST LOGIC) =================
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -263,7 +247,7 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    const cost = calculateCost(service.rate, quantity);
+    const cost = calculateCost(service.baseRate, quantity); // 🔥 FIXED
 
     const user = await User.findById(req.user.id);
 
@@ -283,7 +267,6 @@ app.post("/api/order", auth, async (req, res) => {
       cost
     });
 
-    // 🔥 REFERRAL BONUS TRIGGER
     await giveReferralBonus(req.user.id, cost);
 
     res.json({
@@ -295,51 +278,6 @@ app.post("/api/order", auth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: "Order failed" });
   }
-});
-
-// ================= ORDERS =================
-app.get("/api/orders", auth, async (req, res) => {
-  const orders = await Order.find({ userId: req.user.id });
-  res.json(orders);
-});
-
-// ================= DEPOSIT =================
-app.post("/api/deposit", auth, async (req, res) => {
-  const { message } = req.body;
-
-  const code = message?.match(/[A-Z0-9]{8,12}/)?.[0];
-  const amount = message?.match(/Ksh\s?([\d,]+)/i)?.[1];
-  const phone = message?.match(/(\d{10,12})/)?.[0];
-
-  if (!code) return res.status(400).json({ error: "Invalid message" });
-
-  const exists = await Deposit.findOne({ transactionCode: code });
-  if (exists) return res.status(400).json({ error: "Used transaction" });
-
-  await Deposit.create({
-    userId: req.user.id,
-    phone,
-    amount: Number(amount || 0),
-    transactionCode: code,
-    message,
-    status: "pending"
-  });
-
-  res.json({ message: "Deposit submitted. Request is in progress." });
-});
-
-// ================= API KEY =================
-app.get("/api/api-key", auth, async (req, res) => {
-  const user = await User.findById(req.user.id);
-
-  if (user.apiKey) return res.json({ apiKey: user.apiKey });
-
-  const apiKey = crypto.randomBytes(24).toString("hex");
-
-  user.apiKey = apiKey;
-  await user.save();
-
-  res.json({ apiKey });
 });
 
 // ================= START =================
