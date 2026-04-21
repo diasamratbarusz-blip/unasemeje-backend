@@ -1,6 +1,5 @@
 // ================= IMPORTS =================
 require("dotenv").config();
-
 const crypto = require("crypto");
 
 console.log("SMM_API_URL:", process.env.SMM_API_URL);
@@ -25,7 +24,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ================= ADMIN =================
+// ================= ADMIN CREDENTIALS =================
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 const ADMIN_PHONE = "0715509440";
 
@@ -33,7 +32,7 @@ const ADMIN_PHONE = "0715509440";
 connectDB();
 log("Server starting...");
 
-// ================= AUTH =================
+// ================= AUTH MIDDLEWARE =================
 function auth(req, res, next) {
   try {
     const header = req.headers.authorization;
@@ -45,6 +44,15 @@ function auth(req, res, next) {
     next();
   } catch {
     return res.status(401).json({ error: "Invalid token" });
+  }
+}
+
+// ================= ADMIN MIDDLEWARE (FIX) =================
+function isAdmin(req, res, next) {
+  if (req.user && (req.user.email === ADMIN_EMAIL || req.user.phone === ADMIN_PHONE)) {
+    next();
+  } else {
+    res.status(403).json({ error: "Access denied. Admin only." });
   }
 }
 
@@ -92,35 +100,29 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ================= 🔥 YOUR ONLY PRICING SYSTEM =================
-
-// ONLY MARKUP SYSTEM (NO PROVIDER LOGIC ANYWHERE)
+// ================= MARKUP SYSTEM =================
 function getMarkup(name = "") {
   const t = String(name).toLowerCase();
-
   if (t.includes("like")) return 30;
   if (t.includes("follower")) return 25;
   if (t.includes("view")) return 35;
   if (t.includes("comment")) return 40;
   if (t.includes("save")) return 40;
-
   return 40;
 }
 
-// FINAL PRICE = RAW RATE + YOUR MARKUP ONLY
 function applyFinalPrice(rate, name) {
   rate = Number(rate || 0);
   const markup = getMarkup(name);
-
   return Number((rate + markup).toFixed(2));
 }
 
-// COST FOR BALANCE (UNCHANGED SAFE FORMULA)
 function calculateCost(rate, qty) {
   return (Number(rate || 0) / 1000) * Number(qty || 0);
 }
 
-// ================= ROOT =================
+// ================= ROUTES =================
+
 app.get("/", (req, res) => {
   res.send("🚀 Backend Running Successfully");
 });
@@ -128,7 +130,6 @@ app.get("/", (req, res) => {
 // ================= REGISTER =================
 app.post("/api/register", async (req, res) => {
   const { email, password, phone, referralCode } = req.body;
-
   const exists = await User.findOne({ email });
   if (exists) return res.status(400).json({ error: "User exists" });
 
@@ -148,12 +149,11 @@ app.post("/api/register", async (req, res) => {
 // ================= LOGIN =================
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
-
   const user = await User.findOne({ email, password });
   if (!user) return res.status(400).json({ error: "Invalid login" });
 
   const token = jwt.sign(
-    { id: user._id, email: user.email, role: user.role },
+    { id: user._id, email: user.email, phone: user.phone },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
@@ -164,7 +164,6 @@ app.post("/api/login", async (req, res) => {
 // ================= USER =================
 app.get("/api/me", auth, async (req, res) => {
   const user = await User.findById(req.user.id);
-
   res.json({
     email: user.email,
     phone: user.phone,
@@ -179,11 +178,9 @@ app.get("/api/me", auth, async (req, res) => {
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
-
     if (!services.length) {
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url, { timeout: 20000 });
-
       const raw = response.data;
       const list = Array.isArray(raw) ? raw : Object.values(raw || {}).flat();
 
@@ -201,35 +198,26 @@ app.get("/api/services", async (req, res) => {
       await Service.insertMany(services);
     }
 
-    // 🔥 ONLY YOUR MARKUP PRICE IS USED HERE
     const formatted = services.map(s => ({
       serviceId: s.serviceId,
       name: s.name,
-      rate: applyFinalPrice(s.rate, s.name), // ONLY SYSTEM
+      rate: applyFinalPrice(s.rate, s.name),
       min: s.min,
       max: s.max,
       category: s.category,
-      platform: detectPlatform(s)
+      platform: s.platform
     }));
 
     const grouped = {};
-
     formatted.forEach(s => {
       const p = s.platform || "Other";
       const c = s.category || "General";
-
       if (!grouped[p]) grouped[p] = {};
       if (!grouped[p][c]) grouped[p][c] = [];
-
-      grouped[p][c].push({
-        serviceId: s.serviceId,
-        name: s.name,
-        rate: s.rate
-      });
+      grouped[p][c].push(s);
     });
 
     res.json({ success: true, data: grouped });
-
   } catch (err) {
     res.status(500).json({ error: "Services failed" });
   }
@@ -239,18 +227,13 @@ app.get("/api/services", async (req, res) => {
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
-
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    // 🔥 SAME PRICE SYSTEM USED (MARKUP ONLY)
-    const cost = calculateCost(service.rate, quantity);
-
+    const cost = calculateCost(applyFinalPrice(service.rate, service.name), quantity);
     const user = await User.findById(req.user.id);
 
-    if (user.balance < cost) {
-      return res.status(400).json({ error: "Insufficient balance" });
-    }
+    if (user.balance < cost) return res.status(400).json({ error: "Insufficient balance" });
 
     user.balance -= cost;
     await user.save();
@@ -265,13 +248,7 @@ app.post("/api/order", auth, async (req, res) => {
     });
 
     await giveReferralBonus(req.user.id, cost);
-
-    res.json({
-      message: "Order placed",
-      order,
-      balance: user.balance
-    });
-
+    res.json({ message: "Order placed", order, balance: user.balance });
   } catch (err) {
     res.status(500).json({ error: "Order failed" });
   }
@@ -283,48 +260,108 @@ app.get("/api/orders", auth, async (req, res) => {
   res.json(orders);
 });
 
-// ================= DEPOSIT =================
+// ================= DEPOSIT SUBMIT =================
 app.post("/api/deposit", auth, async (req, res) => {
-  const { message } = req.body;
-
+  const { message, phone, amount } = req.body;
   const code = message?.match(/[A-Z0-9]{8,12}/)?.[0];
-  const amount = message?.match(/Ksh\s?([\d,]+)/i)?.[1];
-  const phone = message?.match(/(\d{10,12})/)?.[0];
-
-  if (!code) return res.status(400).json({ error: "Invalid message" });
+  
+  if (!code) return res.status(400).json({ error: "Invalid M-Pesa code found in message" });
 
   const exists = await Deposit.findOne({ transactionCode: code });
-  if (exists) return res.status(400).json({ error: "Used transaction" });
+  if (exists) return res.status(400).json({ error: "This transaction code has already been used." });
 
   await Deposit.create({
     userId: req.user.id,
-    phone,
+    userEmail: req.user.email,
+    phone: phone || "N/A",
     amount: Number(amount || 0),
     transactionCode: code,
     message,
     status: "pending"
   });
 
-  res.json({ message: "Deposit submitted. Request is in progress." });
+  res.json({ message: "Deposit submitted for admin approval." });
 });
 
 // ================= API KEY =================
 app.get("/api/api-key", auth, async (req, res) => {
   const user = await User.findById(req.user.id);
-
   if (user.apiKey) return res.json({ apiKey: user.apiKey });
-
   const apiKey = crypto.randomBytes(24).toString("hex");
-
   user.apiKey = apiKey;
   await user.save();
-
   res.json({ apiKey });
+});
+
+// ================= 🔥 ADMIN ROUTES (FIXED & ADDED) 🔥 =================
+
+// 1. Get All Users
+app.get("/api/admin/users", auth, isAdmin, async (req, res) => {
+  try {
+    const users = await User.find({}, "-password");
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
+
+// 2. Get Pending Deposits
+app.get("/api/admin/deposits", auth, isAdmin, async (req, res) => {
+  try {
+    const deposits = await Deposit.find().sort({ createdAt: -1 });
+    res.json(deposits);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch deposits" });
+  }
+});
+
+// 3. Approve Deposit
+app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
+  try {
+    const { depositId } = req.body;
+    const dep = await Deposit.findById(depositId);
+    if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid deposit" });
+
+    const user = await User.findById(dep.userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    user.balance += dep.amount;
+    dep.status = "approved";
+
+    await user.save();
+    await dep.save();
+
+    res.json({ message: "Deposit approved and balance updated" });
+  } catch (err) {
+    res.status(500).json({ error: "Approval failed" });
+  }
+});
+
+// 4. Get All Orders
+app.get("/api/admin/orders", auth, isAdmin, async (req, res) => {
+  try {
+    const orders = await Order.find().sort({ createdAt: -1 });
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch orders" });
+  }
+});
+
+// 5. Manual Balance Update
+app.post("/api/admin/update-balance", auth, isAdmin, async (req, res) => {
+    try {
+        const { userId, amount } = req.body;
+        const user = await User.findById(userId);
+        user.balance += Number(amount);
+        await user.save();
+        res.json({ message: "Balance updated manually" });
+    } catch (err) {
+        res.status(500).json({ error: "Update failed" });
+    }
 });
 
 // ================= START =================
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log("🚀 Server running on port", PORT);
   log("Server running on port " + PORT);
