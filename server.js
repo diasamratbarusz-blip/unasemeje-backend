@@ -1,14 +1,11 @@
 // ================= IMPORTS =================
 require("dotenv").config();
 const crypto = require("crypto");
-
-console.log("SMM_API_URL:", process.env.SMM_API_URL);
-console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
-
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
+const path = require("path");
 
 const connectDB = require("./config/db");
 const log = require("./utils/logger");
@@ -19,70 +16,90 @@ const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
+// Log API status on boot
+console.log("SMM_API_URL:", process.env.SMM_API_URL);
+console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
+
 const app = express();
 
+/**
+ * =========================================
+ * MIDDLEWARE & CONFIG
+ * =========================================
+ */
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, "public"))); // Serves your frontend
 
-// ================= ADMIN CREDENTIALS =================
+// ADMIN CREDENTIALS
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 const ADMIN_PHONE = "0715509440";
 
-// ================= CONNECT DB =================
+// CONNECT DB
 connectDB();
 log("Server starting...");
 
-// ================= AUTH MIDDLEWARE =================
+/**
+ * =========================================
+ * AUTHENTICATION HELPERS
+ * =========================================
+ */
+
+// User Auth
 function auth(req, res, next) {
   try {
     const header = req.headers.authorization;
-    if (!header) return res.status(401).json({ error: "No token" });
+    if (!header) return res.status(401).json({ error: "Access denied. No token provided." });
 
     const token = header.split(" ")[1];
     req.user = jwt.verify(token, process.env.JWT_SECRET);
-
     next();
   } catch {
-    return res.status(401).json({ error: "Invalid token" });
+    return res.status(401).json({ error: "Invalid or expired token" });
   }
 }
 
-// ================= ADMIN MIDDLEWARE =================
+// Admin Check
 function isAdmin(req, res, next) {
   if (req.user && (req.user.email === ADMIN_EMAIL || req.user.phone === ADMIN_PHONE)) {
     next();
   } else {
-    res.status(403).json({ error: "Access denied. Admin only." });
+    res.status(403).json({ error: "Access denied. Admin privileges required." });
   }
 }
 
-// ================= REFERRAL SYSTEM =================
+/**
+ * =========================================
+ * BUSINESS LOGIC UTILS
+ * =========================================
+ */
+
 function generateReferralCode() {
   return crypto.randomBytes(4).toString("hex");
 }
 
-async function giveReferralBonus(userId, amount) {
+async function giveReferralBonus(userId, orderCost) {
   const user = await User.findById(userId);
   if (!user || !user.referredBy) return;
 
   const referrer = await User.findOne({ referralCode: user.referredBy });
   if (!referrer) return;
 
-  const bonus = amount * 0.10;
+  const bonus = orderCost * 0.10; // 10% Referral Commission
   referrer.balance += bonus;
   referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
 
   await referrer.save();
+  log(`Referral bonus of ${bonus} given to ${referrer.email}`);
 }
 
-// ================= SERVICE UTILS =================
-function cleanName(name = "") {
+function cleanServiceName(name = "") {
   return String(name || "")
     .replace(/^TTF\d+\s*/i, "")
     .replace(/^TTV\d+\s*/i, "")
     .replace(/^TTL\d+\s*/i, "")
     .replace(/\[.*?\]/g, "")
-    .trim() || "Service";
+    .trim() || "SMM Service";
 }
 
 function detectPlatform(service = {}) {
@@ -96,66 +113,72 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ================= PRICING & MONEY DETECTION =================
+// Markup logic: Returns the amount to ADD to the original rate
 function getMarkup(name = "") {
   const t = String(name).toLowerCase();
   if (t.includes("like")) return 30;
   if (t.includes("follower")) return 25;
   if (t.includes("view")) return 35;
-  if (t.includes("comment")) return 40;
-  return 40;
+  return 40; // Default for comments/saves/other
 }
 
-function applyFinalPrice(rate, name) {
+function applyFinalPrice(originalRate, name) {
   const markup = getMarkup(name);
-  return Number((Number(rate || 0) + markup).toFixed(2));
+  return Number((Number(originalRate || 0) + markup).toFixed(2));
 }
 
-function calculateCost(finalRate, qty) {
-  return (finalRate / 1000) * Number(qty || 0);
-}
+/**
+ * =========================================
+ * USER & AUTH ROUTES
+ * =========================================
+ */
 
-// ================= ROUTES =================
+app.get("/", (req, res) => res.send("🚀 Unasemeje SMM Backend Operational"));
 
-app.get("/", (req, res) => res.send("🚀 Backend Operational"));
-
-// REGISTER / LOGIN
 app.post("/api/register", async (req, res) => {
-  const { email, password, phone, referralCode } = req.body;
-  const exists = await User.findOne({ email });
-  if (exists) return res.status(400).json({ error: "User exists" });
+  try {
+    const { email, password, phone, referralCode } = req.body;
+    const exists = await User.findOne({ $or: [{ email }, { phone }] });
+    if (exists) return res.status(400).json({ error: "Email or Phone already registered" });
 
-  await User.create({
-    email, password, phone,
-    referralCode: generateReferralCode(),
-    referredBy: referralCode || null,
-    balance: 0
-  });
-  res.json({ message: "Registered" });
+    const newUser = await User.create({
+      email, password, phone,
+      referralCode: generateReferralCode(),
+      referredBy: referralCode || null,
+      balance: 0
+    });
+    res.json({ message: "Registration successful", referralCode: newUser.referralCode });
+  } catch (err) { res.status(500).json({ error: "Registration failed" }); }
 });
 
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email, password });
-  if (!user) return res.status(400).json({ error: "Invalid login" });
+  if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
   const token = jwt.sign(
     { id: user._id, email: user.email, phone: user.phone },
     process.env.JWT_SECRET, { expiresIn: "7d" }
   );
-  res.json({ token });
+  res.json({ token, balance: user.balance });
 });
 
-// USER DATA
 app.get("/api/me", auth, async (req, res) => {
-  const user = await User.findById(req.user.id);
+  const user = await User.findById(req.user.id).select("-password");
   res.json(user);
 });
 
-// SERVICES
+/**
+ * =========================================
+ * SERVICES & ORDERS
+ * =========================================
+ */
+
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
+    
+    // Auto-sync if empty
     if (!services.length) {
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url);
@@ -163,7 +186,7 @@ app.get("/api/services", async (req, res) => {
 
       services = list.map((s, i) => ({
         serviceId: String(s.service || s.id || i),
-        name: cleanName(s.name),
+        name: cleanServiceName(s.name),
         rate: Number(s.rate || 0),
         min: Number(s.min || 1),
         max: Number(s.max || 10000),
@@ -180,66 +203,67 @@ app.get("/api/services", async (req, res) => {
       const c = s.category;
       if (!grouped[p]) grouped[p] = {};
       if (!grouped[p][c]) grouped[p][c] = [];
+      
+      const serviceObj = s.toObject ? s.toObject() : s;
       grouped[p][c].push({
-        ...s.toObject(),
+        ...serviceObj,
         rate: applyFinalPrice(s.rate, s.name)
       });
     });
     res.json({ success: true, data: grouped });
-  } catch (err) { res.status(500).json({ error: "Failed to load services" }); }
+  } catch (err) { 
+    log("Service Fetch Error: " + err.message);
+    res.status(500).json({ error: "Failed to load services" }); 
+  }
 });
 
-// ================= PLACING ORDER & MONEY DETECTION =================
+// CORE: Order Placement with Balance Deduction
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
+    
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    // 1. Calculate final rate with markup
-    const finalRate = applyFinalPrice(service.rate, service.name);
-    // 2. Calculate final cost
-    const cost = calculateCost(finalRate, quantity);
+    // 1. Calculate price for user
+    const userRate = applyFinalPrice(service.rate, service.name);
+    const totalCost = (userRate / 1000) * Number(quantity);
 
+    // 2. Check User Balance
     const user = await User.findById(req.user.id);
-    if (user.balance < cost) return res.status(400).json({ error: "Insufficient balance" });
+    if (user.balance < totalCost) {
+      return res.status(400).json({ error: `Insufficient balance. Required: ${totalCost} KES` });
+    }
 
-    // 3. Detect (Deduct) Money
-    user.balance -= cost;
+    // 3. Deduct Money first (Safety)
+    user.balance -= totalCost;
     await user.save();
 
-    // 4. Record Order
+    // 4. Record the Order in Local DB
     const order = await Order.create({
       userId: user._id,
       service: service.name,
       serviceId,
       link,
       quantity,
-      cost,
-      status: "pending",
-      refill: false // Initial refill status
+      cost: totalCost,
+      status: "pending"
     });
 
-    await giveReferralBonus(req.user.id, cost);
+    // 5. Handle Referrals
+    await giveReferralBonus(user._id, totalCost);
 
-    res.json({ message: "Order placed successfully", order, balance: user.balance });
-  } catch (err) { res.status(500).json({ error: "Order failed" }); }
-});
+    res.json({ 
+      success: true, 
+      message: "Order placed successfully", 
+      orderId: order._id, 
+      newBalance: user.balance 
+    });
 
-// REFILL ORDER LOGIC
-app.post("/api/order/refill", auth, async (req, res) => {
-    try {
-        const { orderId } = req.body;
-        const order = await Order.findOne({ _id: orderId, userId: req.user.id });
-        
-        if (!order) return res.status(404).json({ error: "Order not found" });
-        
-        // Mark for refill processing
-        order.status = "refilling";
-        await order.save();
-        
-        res.json({ message: "Refill request sent successfully" });
-    } catch (err) { res.status(500).json({ error: "Refill failed" }); }
+  } catch (err) { 
+    log("Order Placement Error: " + err.message);
+    res.status(500).json({ error: "Internal server error during order placement" }); 
+  }
 });
 
 app.get("/api/orders", auth, async (req, res) => {
@@ -247,53 +271,57 @@ app.get("/api/orders", auth, async (req, res) => {
   res.json(orders);
 });
 
-// DEPOSIT
+/**
+ * =========================================
+ * PAYMENTS & ADMIN
+ * =========================================
+ */
+
 app.post("/api/deposit", auth, async (req, res) => {
   const { message, phone, amount } = req.body;
-  const code = message?.match(/[A-Z0-9]{8,12}/)?.[0];
-  if (!code) return res.status(400).json({ error: "Invalid M-Pesa code" });
+  const code = message?.match(/[A-Z0-9]{8,12}/)?.[0]; // M-Pesa Code detection
+  
+  if (!code) return res.status(400).json({ error: "Invalid transaction code found in message" });
 
   const exists = await Deposit.findOne({ transactionCode: code });
-  if (exists) return res.status(400).json({ error: "Code already used" });
+  if (exists) return res.status(400).json({ error: "This transaction code has already been claimed" });
 
   await Deposit.create({
     userId: req.user.id,
     userEmail: req.user.email,
     phone, amount, transactionCode: code, message, status: "pending"
   });
-  res.json({ message: "Deposit submitted for approval" });
+  res.json({ message: "Deposit submitted. It will be approved after verification." });
 });
 
-// ================= ADMIN ROUTES =================
+// Admin Approve Deposit
+app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
+  const { depositId } = req.body;
+  const dep = await Deposit.findById(depositId);
+  if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid or already approved deposit" });
+
+  const user = await User.findById(dep.userId);
+  if (user) {
+    user.balance += Number(dep.amount);
+    await user.save();
+  }
+  
+  dep.status = "approved";
+  await dep.save();
+  res.json({ message: "Deposit approved and balance updated" });
+});
+
 app.get("/api/admin/users", auth, isAdmin, async (req, res) => {
   const users = await User.find({}, "-password");
   res.json(users);
 });
 
-app.get("/api/admin/deposits", auth, isAdmin, async (req, res) => {
-  const deposits = await Deposit.find().sort({ createdAt: -1 });
-  res.json(deposits);
-});
-
-app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
-  const { depositId } = req.body;
-  const dep = await Deposit.findById(depositId);
-  if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid" });
-
-  const user = await User.findById(dep.userId);
-  user.balance += Number(dep.amount);
-  dep.status = "approved";
-
-  await user.save();
-  await dep.save();
-  res.json({ message: "Approved" });
-});
-
-app.get("/api/admin/orders", auth, isAdmin, async (req, res) => {
-  const orders = await Order.find().sort({ createdAt: -1 });
-  res.json(orders);
-});
-
-// START
+/**
+ * =========================================
+ * START SERVER
+ * =========================================
+ */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🚀 Server Port:", PORT));
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
