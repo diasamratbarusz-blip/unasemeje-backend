@@ -225,32 +225,38 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    // 1. Calculate price for user
     const userRate = applyFinalPrice(service.rate, service.name);
     const totalCost = (userRate / 1000) * Number(quantity);
 
-    // 2. Check User Balance
     const user = await User.findById(req.user.id);
     if (user.balance < totalCost) {
       return res.status(400).json({ error: `Insufficient balance. Required: ${totalCost} KES` });
     }
 
-    // 3. Deduct Money first (Safety)
+    // Call Provider API first to get their order ID
+    const providerUrl = `${process.env.SMM_API_URL}?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
+    const providerRes = await axios.get(providerUrl);
+    
+    if (!providerRes.data || providerRes.data.error) {
+        return res.status(400).json({ error: providerRes.data.error || "Provider error" });
+    }
+
+    // Deduct Balance
     user.balance -= totalCost;
     await user.save();
 
-    // 4. Record the Order in Local DB
+    // Record the Order with Provider's ID
     const order = await Order.create({
       userId: user._id,
       service: service.name,
       serviceId,
+      orderId: providerRes.data.order, // CRITICAL: This is the ID from provider
       link,
       quantity,
       cost: totalCost,
       status: "pending"
     });
 
-    // 5. Handle Referrals
     await giveReferralBonus(user._id, totalCost);
 
     res.json({ 
@@ -262,7 +268,7 @@ app.post("/api/order", auth, async (req, res) => {
 
   } catch (err) { 
     log("Order Placement Error: " + err.message);
-    res.status(500).json({ error: "Internal server error during order placement" }); 
+    res.status(500).json({ error: "Internal server error" }); 
   }
 });
 
@@ -271,21 +277,45 @@ app.get("/api/orders", auth, async (req, res) => {
   res.json(orders);
 });
 
-// NEW: Refill Logic Added Here
+// NEW: Sync Status Route
+app.get("/api/sync-orders", auth, async (req, res) => {
+  try {
+    const orders = await Order.find({ 
+        userId: req.user.id, 
+        status: { $in: ["pending", "processing", "inprogress", "Pending", "Processing", "In progress"] } 
+    });
+
+    for (let order of orders) {
+      if (order.orderId) { 
+        const url = `${process.env.SMM_API_URL}?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
+        const response = await axios.get(url);
+        
+        if (response.data && response.data.status) {
+          order.status = response.data.status.toLowerCase();
+          await order.save();
+        }
+      }
+    }
+    
+    const updatedOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
+    res.json(updatedOrders);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to sync orders" });
+  }
+});
+
+// NEW: Refill Logic
 app.post('/api/refill', auth, async (req, res) => {
     try {
         const { orderId } = req.body;
-        
-        // Find the order by its database ID or the provider orderId
         const order = await Order.findById(orderId);
         if (!order) return res.status(404).json({ error: "Order not found" });
 
-        // Call your Provider's API using your env variables
-        const url = `${process.env.SMM_API_URL}?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId || order._id}`;
+        const url = `${process.env.SMM_API_URL}?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId}`;
         const response = await axios.get(url);
         const data = response.data;
 
-        if (data.refill || data.status === "success") {
+        if (data.refill || data.status === "success" || data.refill_id) {
             res.json({ success: true, message: "Refill request sent successfully!" });
         } else {
             res.json({ success: false, error: data.error || "Refill not available for this order yet." });
@@ -304,26 +334,25 @@ app.post('/api/refill', auth, async (req, res) => {
 
 app.post("/api/deposit", auth, async (req, res) => {
   const { message, phone, amount } = req.body;
-  const code = message?.match(/[A-Z0-9]{8,12}/)?.[0]; // M-Pesa Code detection
+  const code = message?.match(/[A-Z0-9]{8,12}/)?.[0];
   
-  if (!code) return res.status(400).json({ error: "Invalid transaction code found in message" });
+  if (!code) return res.status(400).json({ error: "Invalid transaction code" });
 
   const exists = await Deposit.findOne({ transactionCode: code });
-  if (exists) return res.status(400).json({ error: "This transaction code has already been claimed" });
+  if (exists) return res.status(400).json({ error: "Code already claimed" });
 
   await Deposit.create({
     userId: req.user.id,
     userEmail: req.user.email,
     phone, amount, transactionCode: code, message, status: "pending"
   });
-  res.json({ message: "Deposit submitted. It will be approved after verification." });
+  res.json({ message: "Deposit submitted for verification." });
 });
 
-// Admin Approve Deposit
 app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
   const { depositId } = req.body;
   const dep = await Deposit.findById(depositId);
-  if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid or already approved deposit" });
+  if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid deposit" });
 
   const user = await User.findById(dep.userId);
   if (user) {
@@ -333,7 +362,7 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
   
   dep.status = "approved";
   await dep.save();
-  res.json({ message: "Deposit approved and balance updated" });
+  res.json({ message: "Deposit approved" });
 });
 
 app.get("/api/admin/users", auth, isAdmin, async (req, res) => {
