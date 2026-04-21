@@ -271,6 +271,31 @@ app.get("/api/orders", auth, async (req, res) => {
   res.json(orders);
 });
 
+// NEW: Refill Logic Added Here
+app.post('/api/refill', auth, async (req, res) => {
+    try {
+        const { orderId } = req.body;
+        
+        // Find the order by its database ID or the provider orderId
+        const order = await Order.findById(orderId);
+        if (!order) return res.status(404).json({ error: "Order not found" });
+
+        // Call your Provider's API using your env variables
+        const url = `${process.env.SMM_API_URL}?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId || order._id}`;
+        const response = await axios.get(url);
+        const data = response.data;
+
+        if (data.refill || data.status === "success") {
+            res.json({ success: true, message: "Refill request sent successfully!" });
+        } else {
+            res.json({ success: false, error: data.error || "Refill not available for this order yet." });
+        }
+    } catch (error) {
+        log("Refill Error: " + error.message);
+        res.status(500).json({ error: "Server error during refill request" });
+    }
+});
+
 /**
  * =========================================
  * PAYMENTS & ADMIN
