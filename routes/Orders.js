@@ -1,19 +1,17 @@
 const express = require("express");
 const router = express.Router();
 const axios = require("axios");
-const Order = require("../models/Order"); // Ensure path is correct
+const Order = require("../models/Order"); 
 
 /**
  * =========================================
  * PLACE ORDER (POST /api/orders)
  * =========================================
- * Handles validation, provider API call, and DB logging
  */
 router.post("/", async (req, res) => {
   try {
     const { serviceId, link, quantity, userId, rate, serviceName } = req.body;
 
-    // 1. Basic Validation
     if (!serviceId || !link || !quantity || !userId) {
       return res.status(400).json({
         success: false,
@@ -21,7 +19,7 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // 2. Prepare API Request to Provider
+    // Prepare API Request to Provider
     const params = new URLSearchParams();
     params.append("key", process.env.SMM_API_KEY);
     params.append("action", "add");
@@ -29,17 +27,10 @@ router.post("/", async (req, res) => {
     params.append("link", link);
     params.append("quantity", quantity);
 
-    // 3. Contact Provider
     const response = await axios.post(process.env.SMM_API_URL, params, {
-      timeout: 15000 // 15 seconds timeout
+      timeout: 15000 
     });
 
-    console.log("PROVIDER RESPONSE:", response.data);
-
-    /**
-     * PRO TIP: SMM Providers often return errors in response.data.error
-     * Even if the HTTP status is 200 (Success).
-     */
     if (response.data.error) {
       return res.status(400).json({
         success: false,
@@ -50,28 +41,24 @@ router.post("/", async (req, res) => {
     if (!response.data || !response.data.order) {
       return res.status(500).json({
         success: false,
-        message: "Provider did not return an Order ID",
-        debug: response.data
+        message: "Provider did not return an Order ID"
       });
     }
 
-    // 4. Save to Database
-    // Using the pre-save hook in the model to calculate 'cost' automatically
     const newOrder = new Order({
       userId,
       serviceId,
       serviceName: serviceName || "SMM Service",
       link,
       quantity,
-      rate: rate || 0, // Passed from frontend or fetched from service list
-      providerOrderId: response.data.order,
-      providerResponse: response.data, // Storing full response for debugging
+      rate: rate || 0,
+      providerOrderId: response.data.order, // This maps to o.orderId in your frontend
+      providerResponse: response.data,
       status: "pending"
     });
 
     await newOrder.save();
 
-    // 5. Success Response
     res.json({
       success: true,
       message: "Order placed successfully",
@@ -80,85 +67,107 @@ router.post("/", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("❌ CRITICAL ORDER ERROR:", err.message);
-
-    // Check if the error came from the Provider's server
-    const errorMsg = err.response ? 
-      `API Error: ${JSON.stringify(err.response.data)}` : 
-      err.message;
-
+    console.error("❌ ORDER ERROR:", err.message);
     res.status(500).json({
       success: false,
-      message: "An internal error occurred while placing the order",
-      error: errorMsg
+      message: "Internal error occurred",
+      error: err.message
     });
   }
 });
 
 /**
  * =========================================
- * GET USER ORDERS (GET /api/orders/:userId)
+ * GET USER ORDERS (GET /api/orders/user/:userId)
  * =========================================
  */
 router.get("/user/:userId", async (req, res) => {
   try {
     const orders = await Order.find({ userId: req.params.userId })
       .sort({ createdAt: -1 })
-      .limit(50); // Optimization: don't load thousands at once
+      .limit(50);
 
     res.json({
       success: true,
       count: orders.length,
       data: orders
     });
-
   } catch (err) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch orders",
-      error: err.message
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
 /**
  * =========================================
- * SYNC STATUS (GET /api/orders/status/:orderId)
+ * SYNC ALL PENDING ORDERS (GET /api/orders/sync-all/:userId)
  * =========================================
  */
-router.get("/status/:orderId", async (req, res) => {
-  try {
-    const params = new URLSearchParams();
-    params.append("key", process.env.SMM_API_KEY);
-    params.append("action", "status");
-    params.append("order", req.params.orderId);
+router.get("/sync-all/:userId", async (req, res) => {
+    try {
+        // Only sync orders that aren't finished yet
+        const pendingOrders = await Order.find({ 
+            userId: req.params.userId, 
+            status: { $in: ["pending", "processing", "inprogress", "pending_refill"] } 
+        });
 
-    const response = await axios.post(process.env.SMM_API_URL, params);
+        for (let order of pendingOrders) {
+            if (order.providerOrderId) {
+                const params = new URLSearchParams();
+                params.append("key", process.env.SMM_API_KEY);
+                params.append("action", "status");
+                params.append("order", order.providerOrderId);
 
-    // Update the local database with the latest status from provider
-    if (response.data && response.data.status) {
-      await Order.findOneAndUpdate(
-        { providerOrderId: req.params.orderId },
-        { 
-          status: response.data.status.toLowerCase().replace(" ", "_"),
-          remains: response.data.remains,
-          startCount: response.data.start_count
+                const response = await axios.post(process.env.SMM_API_URL, params);
+
+                if (response.data && response.data.status) {
+                    order.status = response.data.status.toLowerCase().replace(/\s+/g, '');
+                    order.remains = response.data.remains;
+                    order.startCount = response.data.start_count;
+                    await order.save();
+                }
+            }
         }
-      );
+
+        const allOrders = await Order.find({ userId: req.params.userId }).sort({ createdAt: -1 });
+        res.json({ success: true, data: allOrders });
+    } catch (err) {
+        res.status(500).json({ success: false, message: "Sync failed", error: err.message });
     }
+});
 
-    res.json({
-      success: true,
-      data: response.data
-    });
+/**
+ * =========================================
+ * REQUEST REFILL (POST /api/orders/refill)
+ * =========================================
+ */
+router.post("/refill", async (req, res) => {
+    try {
+        const { orderId } = req.body; // providerOrderId from dashboard
+        
+        const params = new URLSearchParams();
+        params.append("key", process.env.SMM_API_KEY);
+        params.append("action", "refill");
+        params.append("order", orderId);
 
-  } catch (err) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to sync status",
-      error: err.message
-    });
-  }
+        const response = await axios.post(process.env.SMM_API_URL, params);
+
+        if (response.data && (response.data.refill || response.data.status === "success")) {
+            // Optional: Update status in DB to show refill is active
+            await Order.findOneAndUpdate(
+                { providerOrderId: orderId },
+                { status: "pending_refill" }
+            );
+            
+            res.json({ success: true, message: "Refill request sent to provider!" });
+        } else {
+            res.status(400).json({ 
+                success: false, 
+                message: response.data.error || "Refill not available for this service." 
+            });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 module.exports = router;
