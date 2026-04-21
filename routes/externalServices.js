@@ -1,110 +1,124 @@
 const express = require("express");
 const router = express.Router();
 const axios = require("axios");
+const qs = require("qs"); // Useful for form-data encoding
 
 /**
- * ================================
- * GET SERVICES FROM EXTERNAL SMM PROVIDER
- * ================================
- * This pulls raw services directly from:
- * - JustAnotherPanel style API
- * - or any SMM provider API
- *
- * Used ONLY for:
- * - syncing
- * - previewing provider services
- * NOT for user frontend display
+ * =========================================
+ * FETCH SERVICES FROM PROVIDER
+ * =========================================
+ * GET /api/external-services
  */
-
 router.get("/", async (req, res) => {
   try {
-    // ================= VALIDATE CONFIG =================
-    if (!process.env.API_URL || !process.env.API_KEY) {
+    const API_URL = process.env.SMM_API_URL || process.env.API_URL;
+    const API_KEY = process.env.SMM_API_KEY || process.env.API_KEY;
+
+    if (!API_URL || !API_KEY) {
       return res.status(500).json({
-        error: "API configuration missing (API_URL / API_KEY)"
+        success: false,
+        error: "Server configuration error: API_URL or API_KEY is missing in .env"
       });
     }
 
-    // ================= REQUEST PROVIDER =================
-    const response = await axios.post(
-      process.env.API_URL,
-      {
-        key: process.env.API_KEY,
-        action: "services"
-      },
-      {
-        timeout: 20000,
-        headers: {
-          "Content-Type": "application/json"
-        }
-      }
-    );
+    /**
+     * SMM Panels are picky. We use URLSearchParams to ensure compatibility 
+     * with standard APIs (like JustAnotherPanel, PerfectPanel, etc.)
+     */
+    const params = new URLSearchParams();
+    params.append("key", API_KEY);
+    params.append("action", "services");
 
-    // ================= VALIDATE RESPONSE =================
-    const data = response.data;
+    const response = await axios.post(API_URL, params, {
+      timeout: 25000,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" }
+    });
 
-    if (!data || !Array.isArray(data)) {
-      return res.status(500).json({
-        error: "Invalid response from provider",
-        received: typeof data
+    // 1. Check for provider-level errors (e.g., "Invalid API Key")
+    if (response.data.error) {
+      return res.status(400).json({
+        success: false,
+        error: `Provider Error: ${response.data.error}`
       });
     }
 
-    // ================= CLEAN DATA =================
-    const cleanedServices = data.map((s) => ({
-      serviceId: s.service || s.id || null,
-      name: s.name || "Unknown Service",
+    // 2. Validate that we received an array of services
+    const rawServices = response.data;
+    if (!Array.isArray(rawServices)) {
+      return res.status(500).json({
+        success: false,
+        error: "Provider returned invalid data format (Expected Array)",
+        received: typeof rawServices
+      });
+    }
+
+    // 3. Clean and Standardize Data
+    // We map the fields to ensure your frontend always gets consistent keys
+    const cleanedServices = rawServices.map((s) => ({
+      serviceId: String(s.service || s.id),
+      name: s.name || "Unnamed Service",
       category: s.category || "General",
-      rate: Number(s.rate || 0),
-      min: Number(s.min || 0),
-      max: Number(s.max || 0),
-      type: s.type || null
+      rate: parseFloat(s.rate || 0),
+      min: parseInt(s.min || 0),
+      max: parseInt(s.max || 0),
+      type: s.type || "Default",
+      description: s.description || ""
     }));
 
-    // ================= RESPONSE =================
     res.json({
       success: true,
       total: cleanedServices.length,
-      services: cleanedServices
+      data: cleanedServices
     });
 
   } catch (error) {
-    console.error("❌ External Services Error:", {
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data
-    });
-
+    console.error("❌ External Services Fetch Failed:", error.message);
+    
     res.status(500).json({
-      error: "Failed to fetch external services",
+      success: false,
+      error: "Connection to SMM Provider failed",
       details: error.response?.data || error.message
     });
   }
 });
 
 /**
- * ================================
- * OPTIONAL: TEST PROVIDER CONNECTION
- * ================================
+ * =========================================
+ * TEST CONNECTION & CHECK BALANCE
+ * =========================================
+ * GET /api/external-services/test
  */
 router.get("/test", async (req, res) => {
   try {
-    const response = await axios.post(process.env.API_URL, {
-      key: process.env.API_KEY,
-      action: "balance"
-    });
+    const params = new URLSearchParams();
+    params.append("key", process.env.SMM_API_KEY || process.env.API_KEY);
+    params.append("action", "balance");
+
+    const response = await axios.post(
+      process.env.SMM_API_URL || process.env.API_URL, 
+      params
+    );
+
+    if (response.data.error) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication failed with provider",
+        error: response.data.error
+      });
+    }
 
     res.json({
       success: true,
-      providerStatus: "connected",
-      data: response.data
+      message: "Successfully connected to provider",
+      balance: response.data.balance,
+      currency: response.data.currency || "USD"
     });
 
   } catch (err) {
     res.status(500).json({
       success: false,
-      providerStatus: "failed",
-      error: err.message
+      error: "Could not reach provider server",
+      details: err.message
     });
   }
 });
