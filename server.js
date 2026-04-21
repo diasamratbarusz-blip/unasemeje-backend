@@ -6,6 +6,7 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const path = require("path");
+const mongoose = require("mongoose"); // Added for schema/model support
 
 const connectDB = require("./config/db");
 const log = require("./utils/logger");
@@ -113,13 +114,13 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// Markup logic: Returns the amount to ADD to the original rate
+// Markup logic
 function getMarkup(name = "") {
   const t = String(name).toLowerCase();
   if (t.includes("like")) return 30;
   if (t.includes("follower")) return 25;
   if (t.includes("view")) return 35;
-  return 40; // Default for comments/saves/other
+  return 40; 
 }
 
 function applyFinalPrice(originalRate, name) {
@@ -178,7 +179,6 @@ app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
     
-    // Auto-sync if empty
     if (!services.length) {
       const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url);
@@ -217,7 +217,7 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// CORE: Order Placement with Balance Deduction
+// CORE: Updated Order Placement with Full Detail Storage
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -225,34 +225,35 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
+    // Calculate Final Cost
     const userRate = applyFinalPrice(service.rate, service.name);
     const totalCost = (userRate / 1000) * Number(quantity);
 
     const user = await User.findById(req.user.id);
     if (user.balance < totalCost) {
-      return res.status(400).json({ error: `Insufficient balance. Required: ${totalCost} KES` });
+      return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost.toFixed(2)}` });
     }
 
-    // Call Provider API first to get their order ID
+    // Call Provider API
     const providerUrl = `${process.env.SMM_API_URL}?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
     const providerRes = await axios.get(providerUrl);
     
     if (!providerRes.data || providerRes.data.error) {
-        return res.status(400).json({ error: providerRes.data.error || "Provider error" });
+        return res.status(400).json({ error: providerRes.data.error || "Provider connection error" });
     }
 
     // Deduct Balance
     user.balance -= totalCost;
     await user.save();
 
-    // Record the Order with Provider's ID
+    // Store Order with ALL fields to prevent "Unknown" errors in dashboard
     const order = await Order.create({
       userId: user._id,
-      service: service.name,
-      serviceId,
-      orderId: providerRes.data.order, // CRITICAL: This is the ID from provider
-      link,
-      quantity,
+      serviceId: serviceId,
+      serviceName: service.name, // Explicitly saving service name
+      orderId: providerRes.data.order,
+      link: link,
+      quantity: quantity,
       cost: totalCost,
       status: "pending"
     });
