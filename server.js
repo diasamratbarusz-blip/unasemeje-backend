@@ -6,7 +6,7 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const path = require("path");
-const mongoose = require("mongoose"); // Added for schema/model support
+const mongoose = require("mongoose");
 
 const connectDB = require("./config/db");
 const log = require("./utils/logger");
@@ -30,7 +30,7 @@ const app = express();
  */
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public"))); // Serves your frontend
+app.use(express.static(path.join(__dirname, "public"))); 
 
 // ADMIN CREDENTIALS
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
@@ -46,7 +46,6 @@ log("Server starting...");
  * =========================================
  */
 
-// User Auth
 function auth(req, res, next) {
   try {
     const header = req.headers.authorization;
@@ -60,7 +59,6 @@ function auth(req, res, next) {
   }
 }
 
-// Admin Check
 function isAdmin(req, res, next) {
   if (req.user && (req.user.email === ADMIN_EMAIL || req.user.phone === ADMIN_PHONE)) {
     next();
@@ -86,7 +84,7 @@ async function giveReferralBonus(userId, orderCost) {
   const referrer = await User.findOne({ referralCode: user.referredBy });
   if (!referrer) return;
 
-  const bonus = orderCost * 0.10; // 10% Referral Commission
+  const bonus = orderCost * 0.10; 
   referrer.balance += bonus;
   referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
 
@@ -114,7 +112,6 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// Markup logic
 function getMarkup(name = "") {
   const t = String(name).toLowerCase();
   if (t.includes("like")) return 30;
@@ -217,7 +214,7 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// CORE: Updated Order Placement with Full Detail Storage
+// CORE: Order Placement with detail verification
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -225,7 +222,6 @@ app.post("/api/order", auth, async (req, res) => {
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    // Calculate Final Cost
     const userRate = applyFinalPrice(service.rate, service.name);
     const totalCost = (userRate / 1000) * Number(quantity);
 
@@ -234,7 +230,6 @@ app.post("/api/order", auth, async (req, res) => {
       return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost.toFixed(2)}` });
     }
 
-    // Call Provider API
     const providerUrl = `${process.env.SMM_API_URL}?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
     const providerRes = await axios.get(providerUrl);
     
@@ -242,15 +237,14 @@ app.post("/api/order", auth, async (req, res) => {
         return res.status(400).json({ error: providerRes.data.error || "Provider connection error" });
     }
 
-    // Deduct Balance
     user.balance -= totalCost;
     await user.save();
 
-    // Store Order with ALL fields to prevent "Unknown" errors in dashboard
+    // The order object now matches exactly what the frontend dashboard expects
     const order = await Order.create({
       userId: user._id,
       serviceId: serviceId,
-      serviceName: service.name, // Explicitly saving service name
+      serviceName: service.name, 
       orderId: providerRes.data.order,
       link: link,
       quantity: quantity,
@@ -278,7 +272,7 @@ app.get("/api/orders", auth, async (req, res) => {
   res.json(orders);
 });
 
-// NEW: Sync Status Route
+// SYNC: Ensures real-time status updates from the provider
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const orders = await Order.find({ 
@@ -305,7 +299,6 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   }
 });
 
-// NEW: Refill Logic
 app.post('/api/refill', auth, async (req, res) => {
     try {
         const { orderId } = req.body;
