@@ -177,7 +177,6 @@ app.get("/api/services", async (req, res) => {
     let services = await Service.find();
     
     if (!services.length) {
-      // Updated to v2 URL structure
       const url = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url);
       const list = Array.isArray(response.data) ? response.data : Object.values(response.data).flat();
@@ -215,7 +214,6 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// CORE: Order Placement updated for delixgainske api/v2
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -231,11 +229,9 @@ app.post("/api/order", auth, async (req, res) => {
       return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost.toFixed(2)}` });
     }
 
-    // Provider URL updated to match sample: api/v2?action=add
     const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
     const providerRes = await axios.get(providerUrl);
     
-    // Check for provider order ID in response
     if (!providerRes.data || !providerRes.data.order) {
         log("Provider Rejection: " + JSON.stringify(providerRes.data));
         return res.status(400).json({ error: providerRes.data.error || "Provider connection error" });
@@ -275,7 +271,6 @@ app.get("/api/orders", auth, async (req, res) => {
   res.json(orders);
 });
 
-// SYNC: Updated to handle provider status strings
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const orders = await Order.find({ 
@@ -328,41 +323,75 @@ app.post('/api/refill', auth, async (req, res) => {
 
 /**
  * =========================================
- * PAYMENTS & ADMIN
+ * PAYMENTS & ADMIN (UPDATED DEPOSIT LOGIC)
  * =========================================
  */
 
+// User submits deposit proof
 app.post("/api/deposit", auth, async (req, res) => {
-  const { message, phone, amount } = req.body;
-  const code = message?.match(/[A-Z0-9]{8,12}/)?.[0];
-  
-  if (!code) return res.status(400).json({ error: "Invalid transaction code" });
+  try {
+    const { message, phone, amount } = req.body;
+    
+    // Regex updated to be more flexible for MPESA codes
+    const code = message?.match(/[A-Z0-9]{10,12}/)?.[0] || req.body.transactionCode;
+    
+    if (!code) return res.status(400).json({ error: "Invalid transaction code detected. Please ensure code is correct." });
+    if (!amount || amount <= 0) return res.status(400).json({ error: "Amount is required." });
 
-  const exists = await Deposit.findOne({ transactionCode: code });
-  if (exists) return res.status(400).json({ error: "Code already claimed" });
+    const exists = await Deposit.findOne({ transactionCode: code.toUpperCase() });
+    if (exists) return res.status(400).json({ error: "This transaction code has already been submitted." });
 
-  await Deposit.create({
-    userId: req.user.id,
-    userEmail: req.user.email,
-    phone, amount, transactionCode: code, message, status: "pending"
-  });
-  res.json({ message: "Deposit submitted for verification." });
+    await Deposit.create({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      phone: phone || "N/A",
+      amount: Number(amount),
+      transactionCode: code.toUpperCase(),
+      message: message || "Manual Submission",
+      status: "pending"
+    });
+
+    res.json({ success: true, message: "Deposit submitted for verification. Admin will approve shortly." });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to submit deposit." });
+  }
 });
 
-app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
-  const { depositId } = req.body;
-  const dep = await Deposit.findById(depositId);
-  if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid deposit" });
+// Admin views all pending deposits
+app.get("/api/admin/deposits", auth, isAdmin, async (req, res) => {
+  try {
+    const deposits = await Deposit.find({ status: "pending" }).sort({ createdAt: -1 });
+    res.json(deposits);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch deposits." });
+  }
+});
 
-  const user = await User.findById(dep.userId);
-  if (user) {
+// Admin approves a specific deposit
+app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
+  try {
+    const { depositId } = req.body;
+    const dep = await Deposit.findById(depositId);
+    
+    if (!dep) return res.status(404).json({ error: "Deposit record not found." });
+    if (dep.status === "approved") return res.status(400).json({ error: "This deposit is already approved." });
+
+    const user = await User.findById(dep.userId);
+    if (!user) return res.status(404).json({ error: "User associated with this deposit no longer exists." });
+
+    // Update user balance
     user.balance += Number(dep.amount);
     await user.save();
+    
+    // Update deposit status
+    dep.status = "approved";
+    await dep.save();
+
+    log(`Admin approved KES ${dep.amount} for user ${user.email}`);
+    res.json({ success: true, message: `Successfully approved KES ${dep.amount} for ${user.email}.` });
+  } catch (error) {
+    res.status(500).json({ error: "Error during approval process." });
   }
-  
-  dep.status = "approved";
-  await dep.save();
-  res.json({ message: "Deposit approved" });
 });
 
 app.get("/api/admin/users", auth, isAdmin, async (req, res) => {
