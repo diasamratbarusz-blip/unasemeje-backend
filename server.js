@@ -331,36 +331,39 @@ app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { message, phone, amount } = req.body;
     
-    // Look for MPESA code (8-12 alphanumeric characters)
+    // Improved detection for MPESA code
     const codeMatch = message?.match(/[A-Z0-9]{8,12}/);
-    const code = codeMatch ? codeMatch[0] : req.body.transactionCode;
+    const code = codeMatch ? codeMatch[0] : (req.body.transactionCode || req.body.code);
     
     if (!code) {
-        return res.status(400).json({ error: "MPESA code not found in message." });
+        return res.status(400).json({ error: "Transaction code (MPESA Code) not found." });
     }
 
-    // Safety check: ensure DB is ready
-    if (mongoose.connection.readyState !== 1) {
-        return res.status(500).json({ error: "Database connection busy. Try again." });
-    }
+    const finalCode = code.toUpperCase();
 
-    const exists = await Deposit.findOne({ transactionCode: code.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "This code was already used." });
+    // Check for duplicates using both potential field names
+    const exists = await Deposit.findOne({ 
+        $or: [{ transactionCode: finalCode }, { code: finalCode }] 
+    });
 
-    // Create the record with fallbacks for missing data
+    if (exists) return res.status(400).json({ error: "This transaction code has already been submitted." });
+
+    // FIX FOR E11000: We provide BOTH 'code' and 'transactionCode' 
+    // to satisfy whatever version of the Schema/Index the DB is using.
     await Deposit.create({
       userId: req.user.id,
       userEmail: req.user.email || "Unknown",
       phone: phone || "N/A",
       amount: Number(amount) || 0,
-      transactionCode: code.toUpperCase(),
+      transactionCode: finalCode, // Original name
+      code: finalCode,            // New name to fix the 'null' index error
       message: message || "Manual Submission",
       status: "pending"
     });
 
-    res.json({ success: true, message: "Deposit submitted for approval!" });
+    res.json({ success: true, message: "Deposit submitted! Admin will verify soon." });
   } catch (error) {
-    console.error("CRITICAL DEPOSIT ERROR:", error.message);
+    console.error("DEPOSIT DUPLICATE ERROR FIX:", error.message);
     res.status(500).json({ error: "Server error: " + error.message });
   }
 });
@@ -379,7 +382,7 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
     const { depositId } = req.body;
     const dep = await Deposit.findById(depositId);
     
-    if (!dep) return res.status(404).json({ error: "Deposit record not found." });
+    if (!dep) return res.status(404).json({ error: "Deposit not found." });
     if (dep.status === "approved") return res.status(400).json({ error: "Already approved." });
 
     const user = await User.findById(dep.userId);
@@ -391,8 +394,8 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
     dep.status = "approved";
     await dep.save();
 
-    log(`Admin approved KES ${dep.amount} for ${user.email}`);
-    res.json({ success: true, message: "Approved successfully." });
+    log(`Approved KES ${dep.amount} for ${user.email}`);
+    res.json({ success: true, message: "Deposit approved!" });
   } catch (error) {
     res.status(500).json({ error: "Error during approval." });
   }
