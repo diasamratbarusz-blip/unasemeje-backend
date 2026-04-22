@@ -4,13 +4,14 @@ const mongoose = require("mongoose");
  * =========================
  * ORDER MODEL (SMM PANEL)
  * =========================
- * Tracks user orders, manages pricing calculations,
- * and maintains status history for full traceability.
+ * This model stores all details for social media orders.
+ * It is designed to match the server.js order placement logic 
+ * and the frontend dashboard table columns.
  */
 
 const OrderSchema = new mongoose.Schema(
   {
-    /* ================= USER ================= */
+    /* ================= USER RELATIONSHIP ================= */
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -18,16 +19,16 @@ const OrderSchema = new mongoose.Schema(
       index: true
     },
 
-    /* ================= SERVICE ================= */
+    /* ================= SERVICE INFO ================= */
     serviceId: {
-      type: String, // String to match provider-side IDs
+      type: String, 
       required: [true, "Service ID is required"],
       index: true
     },
 
     serviceName: {
       type: String,
-      default: "Unknown Service",
+      default: "SMM Service",
       trim: true
     },
 
@@ -35,8 +36,7 @@ const OrderSchema = new mongoose.Schema(
     link: {
       type: String,
       required: [true, "Target link (URL) is required"],
-      trim: true,
-      lowercase: true
+      trim: true
     },
 
     quantity: {
@@ -46,12 +46,6 @@ const OrderSchema = new mongoose.Schema(
     },
 
     /* ================= PRICING ================= */
-    rate: {
-      type: Number,
-      required: [true, "Rate per 1000 is required"],
-      default: 0
-    },
-
     cost: {
       type: Number,
       required: true,
@@ -64,33 +58,17 @@ const OrderSchema = new mongoose.Schema(
       uppercase: true
     },
 
-    /* ================= PROVIDER INFO ================= */
-    providerOrderId: {
+    /* ================= PROVIDER SYNC ================= */
+    // This MUST be 'orderId' to match server.js providerRes.data.order
+    orderId: {
       type: String,
       default: null,
       index: true
     },
 
-    providerResponse: {
-      type: mongoose.Schema.Types.Mixed, // Stores raw response for debugging
-      default: null
-    },
-
     /* ================= STATUS ================= */
     status: {
       type: String,
-      enum: {
-        values: [
-          "pending",
-          "processing",
-          "in_progress",
-          "completed",
-          "partial",
-          "canceled",
-          "failed"
-        ],
-        message: "{VALUE} is not a valid status"
-      },
       default: "pending",
       index: true
     },
@@ -107,25 +85,13 @@ const OrderSchema = new mongoose.Schema(
     }
   },
   {
-    timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+    // Automatically adds 'createdAt' and 'updatedAt' fields
+    timestamps: true 
   }
 );
 
-/* ================= MIDDLEWARE ================= */
-
-// Automatically calculate cost before saving
-// Formula: (Rate / 1000) * Quantity
-OrderSchema.pre("save", function (next) {
-  if (this.isModified("rate") || this.isModified("quantity")) {
-    this.cost = (this.rate / 1000) * this.quantity;
-  }
-  next();
-});
-
 /* ================= INDEXING ================= */
-OrderSchema.index({ userId: 1, createdAt: -1 }); // Faster history lookup
-OrderSchema.index({ status: 1 });
+// Optimized for the 'Orders' page which sorts by newest first
+OrderSchema.index({ userId: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Order", OrderSchema);
