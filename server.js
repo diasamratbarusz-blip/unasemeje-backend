@@ -323,44 +323,48 @@ app.post('/api/refill', auth, async (req, res) => {
 
 /**
  * =========================================
- * PAYMENTS & ADMIN (UPDATED DEPOSIT LOGIC)
+ * PAYMENTS & ADMIN
  * =========================================
  */
 
-// User submits deposit proof
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { message, phone, amount } = req.body;
     
-    // Improved code detection: Looks for 8-12 alphanumeric characters
-    // Example: QC48XN67WJ
+    // Look for MPESA code (8-12 alphanumeric characters)
     const codeMatch = message?.match(/[A-Z0-9]{8,12}/);
     const code = codeMatch ? codeMatch[0] : req.body.transactionCode;
     
-    if (!code) return res.status(400).json({ error: "Invalid transaction code. Please paste the full MPESA message." });
-    if (!amount || amount <= 0) return res.status(400).json({ error: "A valid amount is required." });
+    if (!code) {
+        return res.status(400).json({ error: "MPESA code not found in message." });
+    }
+
+    // Safety check: ensure DB is ready
+    if (mongoose.connection.readyState !== 1) {
+        return res.status(500).json({ error: "Database connection busy. Try again." });
+    }
 
     const exists = await Deposit.findOne({ transactionCode: code.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "This transaction code has already been submitted." });
+    if (exists) return res.status(400).json({ error: "This code was already used." });
 
+    // Create the record with fallbacks for missing data
     await Deposit.create({
       userId: req.user.id,
-      userEmail: req.user.email,
+      userEmail: req.user.email || "Unknown",
       phone: phone || "N/A",
-      amount: Number(amount),
+      amount: Number(amount) || 0,
       transactionCode: code.toUpperCase(),
       message: message || "Manual Submission",
       status: "pending"
     });
 
-    res.json({ success: true, message: "Deposit submitted! Admin will verify and update your balance shortly." });
+    res.json({ success: true, message: "Deposit submitted for approval!" });
   } catch (error) {
-    console.error("Deposit Submission Error:", error);
-    res.status(500).json({ error: "Failed to submit deposit due to a server error." });
+    console.error("CRITICAL DEPOSIT ERROR:", error.message);
+    res.status(500).json({ error: "Server error: " + error.message });
   }
 });
 
-// Admin views all pending deposits
 app.get("/api/admin/deposits", auth, isAdmin, async (req, res) => {
   try {
     const deposits = await Deposit.find({ status: "pending" }).sort({ createdAt: -1 });
@@ -370,31 +374,27 @@ app.get("/api/admin/deposits", auth, isAdmin, async (req, res) => {
   }
 });
 
-// Admin approves a specific deposit
 app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
   try {
     const { depositId } = req.body;
     const dep = await Deposit.findById(depositId);
     
     if (!dep) return res.status(404).json({ error: "Deposit record not found." });
-    if (dep.status === "approved") return res.status(400).json({ error: "This deposit is already approved." });
+    if (dep.status === "approved") return res.status(400).json({ error: "Already approved." });
 
     const user = await User.findById(dep.userId);
-    if (!user) return res.status(404).json({ error: "User associated with this deposit no longer exists." });
+    if (!user) return res.status(404).json({ error: "User not found." });
 
-    // Update user balance
     user.balance += Number(dep.amount);
     await user.save();
     
-    // Update deposit status
     dep.status = "approved";
     await dep.save();
 
-    log(`Admin approved KES ${dep.amount} for user ${user.email}`);
-    res.json({ success: true, message: `Successfully approved KES ${dep.amount} for ${user.email}.` });
+    log(`Admin approved KES ${dep.amount} for ${user.email}`);
+    res.json({ success: true, message: "Approved successfully." });
   } catch (error) {
-    console.error("Approval Process Error:", error);
-    res.status(500).json({ error: "Error during approval process." });
+    res.status(500).json({ error: "Error during approval." });
   }
 });
 
