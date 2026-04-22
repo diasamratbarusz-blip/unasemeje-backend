@@ -17,6 +17,11 @@ const depositSchema = new mongoose.Schema(
       required: true
     },
 
+    userEmail: {
+      type: String,
+      default: "Unknown"
+    },
+
     /* ================= PAYMENT INFO ================= */
     phone: {
       type: String,
@@ -31,10 +36,23 @@ const depositSchema = new mongoose.Schema(
     },
 
     /* ================= M-PESA TRANSACTION ================= */
+    // This is the primary field for the transaction code
     transactionCode: {
       type: String,
       unique: true,
-      sparse: true, // allows null until assigned
+      sparse: true,
+      index: true
+    },
+
+    /**
+     * FIX FOR E11000 ERROR:
+     * Added 'code' field to match the existing database index 
+     * causing the "dup key: { code: null }" error.
+     */
+    code: {
+      type: String,
+      unique: true,
+      sparse: true,
       index: true
     },
 
@@ -90,6 +108,8 @@ const depositSchema = new mongoose.Schema(
 
 /* ================= INDEXING ================= */
 depositSchema.index({ userId: 1, createdAt: -1 });
+// Ensure both potential fields are indexed for fast searching
 depositSchema.index({ transactionCode: 1 });
+depositSchema.index({ code: 1 });
 
 module.exports = mongoose.model("Deposit", depositSchema);
