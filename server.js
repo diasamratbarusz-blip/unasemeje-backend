@@ -18,7 +18,7 @@ const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
 // Log API status on boot
-console.log("SMM_API_URL:", process.env.SMM_API_URL);
+console.log("SMM_API_URL:", "https://delixgainske.com/api/v2");
 console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
 
 const app = express();
@@ -177,7 +177,8 @@ app.get("/api/services", async (req, res) => {
     let services = await Service.find();
     
     if (!services.length) {
-      const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
+      // Updated to v2 URL structure
+      const url = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url);
       const list = Array.isArray(response.data) ? response.data : Object.values(response.data).flat();
 
@@ -214,7 +215,7 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// CORE: Order Placement with detail verification
+// CORE: Order Placement updated for delixgainske api/v2
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -230,22 +231,24 @@ app.post("/api/order", auth, async (req, res) => {
       return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost.toFixed(2)}` });
     }
 
-    const providerUrl = `${process.env.SMM_API_URL}?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
+    // Provider URL updated to match sample: api/v2?action=add
+    const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
     const providerRes = await axios.get(providerUrl);
     
-    if (!providerRes.data || providerRes.data.error) {
+    // Check for provider order ID in response
+    if (!providerRes.data || !providerRes.data.order) {
+        log("Provider Rejection: " + JSON.stringify(providerRes.data));
         return res.status(400).json({ error: providerRes.data.error || "Provider connection error" });
     }
 
     user.balance -= totalCost;
     await user.save();
 
-    // The order object now matches exactly what the frontend dashboard expects
     const order = await Order.create({
       userId: user._id,
       serviceId: serviceId,
       serviceName: service.name, 
-      orderId: providerRes.data.order,
+      orderId: String(providerRes.data.order), 
       link: link,
       quantity: quantity,
       cost: totalCost,
@@ -257,7 +260,7 @@ app.post("/api/order", auth, async (req, res) => {
     res.json({ 
       success: true, 
       message: "Order placed successfully", 
-      orderId: order._id, 
+      orderId: order.orderId, 
       newBalance: user.balance 
     });
 
@@ -272,21 +275,24 @@ app.get("/api/orders", auth, async (req, res) => {
   res.json(orders);
 });
 
-// SYNC: Ensures real-time status updates from the provider
+// SYNC: Updated to handle provider status strings
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const orders = await Order.find({ 
         userId: req.user.id, 
-        status: { $in: ["pending", "processing", "inprogress", "Pending", "Processing", "In progress"] } 
+        status: { $in: ["pending", "processing", "inprogress", "Pending", "Processing", "In progress", "Partial"] } 
     });
 
     for (let order of orders) {
       if (order.orderId) { 
-        const url = `${process.env.SMM_API_URL}?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
+        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
         const response = await axios.get(url);
         
         if (response.data && response.data.status) {
-          order.status = response.data.status.toLowerCase();
+          order.status = response.data.status; 
+          if(response.data.remains) order.remains = response.data.remains;
+          if(response.data.start_count) order.startCount = response.data.start_count;
+          
           await order.save();
         }
       }
@@ -305,7 +311,7 @@ app.post('/api/refill', auth, async (req, res) => {
         const order = await Order.findById(orderId);
         if (!order) return res.status(404).json({ error: "Order not found" });
 
-        const url = `${process.env.SMM_API_URL}?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId}`;
+        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId}`;
         const response = await axios.get(url);
         const data = response.data;
 
