@@ -332,11 +332,13 @@ app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { message, phone, amount } = req.body;
     
-    // Regex updated to be more flexible for MPESA codes
-    const code = message?.match(/[A-Z0-9]{10,12}/)?.[0] || req.body.transactionCode;
+    // Improved code detection: Looks for 8-12 alphanumeric characters
+    // Example: QC48XN67WJ
+    const codeMatch = message?.match(/[A-Z0-9]{8,12}/);
+    const code = codeMatch ? codeMatch[0] : req.body.transactionCode;
     
-    if (!code) return res.status(400).json({ error: "Invalid transaction code detected. Please ensure code is correct." });
-    if (!amount || amount <= 0) return res.status(400).json({ error: "Amount is required." });
+    if (!code) return res.status(400).json({ error: "Invalid transaction code. Please paste the full MPESA message." });
+    if (!amount || amount <= 0) return res.status(400).json({ error: "A valid amount is required." });
 
     const exists = await Deposit.findOne({ transactionCode: code.toUpperCase() });
     if (exists) return res.status(400).json({ error: "This transaction code has already been submitted." });
@@ -351,9 +353,10 @@ app.post("/api/deposit", auth, async (req, res) => {
       status: "pending"
     });
 
-    res.json({ success: true, message: "Deposit submitted for verification. Admin will approve shortly." });
+    res.json({ success: true, message: "Deposit submitted! Admin will verify and update your balance shortly." });
   } catch (error) {
-    res.status(500).json({ error: "Failed to submit deposit." });
+    console.error("Deposit Submission Error:", error);
+    res.status(500).json({ error: "Failed to submit deposit due to a server error." });
   }
 });
 
@@ -390,6 +393,7 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
     log(`Admin approved KES ${dep.amount} for user ${user.email}`);
     res.json({ success: true, message: `Successfully approved KES ${dep.amount} for ${user.email}.` });
   } catch (error) {
+    console.error("Approval Process Error:", error);
     res.status(500).json({ error: "Error during approval process." });
   }
 });
