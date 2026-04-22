@@ -331,39 +331,43 @@ app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { message, phone, amount } = req.body;
     
-    // Improved detection for MPESA code
+    // 1. Find the MPESA code
     const codeMatch = message?.match(/[A-Z0-9]{8,12}/);
-    const code = codeMatch ? codeMatch[0] : (req.body.transactionCode || req.body.code);
+    let extractedCode = codeMatch ? codeMatch[0] : (req.body.transactionCode || req.body.code);
     
-    if (!code) {
-        return res.status(400).json({ error: "Transaction code (MPESA Code) not found." });
+    if (!extractedCode) {
+        return res.status(400).json({ error: "Please paste the full MPESA message to submit." });
     }
 
-    const finalCode = code.toUpperCase();
+    const finalCode = extractedCode.toUpperCase();
 
-    // Check for duplicates using both potential field names
+    // 2. Check for duplicates in BOTH possible fields
     const exists = await Deposit.findOne({ 
         $or: [{ transactionCode: finalCode }, { code: finalCode }] 
     });
 
-    if (exists) return res.status(400).json({ error: "This transaction code has already been submitted." });
+    if (exists) {
+        return res.status(400).json({ error: "This code has already been used. Please use a new message." });
+    }
 
-    // FIX FOR E11000: We provide BOTH 'code' and 'transactionCode' 
-    // to satisfy whatever version of the Schema/Index the DB is using.
-    await Deposit.create({
+    // 3. Create the record - We send 'code' AND 'transactionCode' 
+    // to prevent the "duplicate key error { code: null }"
+    const depositData = {
       userId: req.user.id,
-      userEmail: req.user.email || "Unknown",
+      userEmail: req.user.email || "N/A",
       phone: phone || "N/A",
       amount: Number(amount) || 0,
-      transactionCode: finalCode, // Original name
-      code: finalCode,            // New name to fix the 'null' index error
+      transactionCode: finalCode, // Your preferred field
+      code: finalCode,            // Field required by the database index
       message: message || "Manual Submission",
       status: "pending"
-    });
+    };
 
-    res.json({ success: true, message: "Deposit submitted! Admin will verify soon." });
+    await Deposit.create(depositData);
+
+    res.json({ success: true, message: "Deposit submitted! Admin will approve it shortly." });
   } catch (error) {
-    console.error("DEPOSIT DUPLICATE ERROR FIX:", error.message);
+    console.error("DEPOSIT FINAL FIX LOG:", error.message);
     res.status(500).json({ error: "Server error: " + error.message });
   }
 });
