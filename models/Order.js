@@ -36,7 +36,8 @@ const OrderSchema = new mongoose.Schema(
     link: {
       type: String,
       required: [true, "Target link (URL) is required"],
-      trim: true
+      trim: true,
+      unique: false // CRITICAL: Ensures users can order for the same link multiple times
     },
 
     quantity: {
@@ -93,5 +94,8 @@ const OrderSchema = new mongoose.Schema(
 /* ================= INDEXING ================= */
 // Optimized for the 'Orders' page which sorts by newest first
 OrderSchema.index({ userId: 1, createdAt: -1 });
+
+// We remove any unique index requirements for link at the database level
+OrderSchema.path('link').index({ unique: false });
 
 module.exports = mongoose.model("Order", OrderSchema);
