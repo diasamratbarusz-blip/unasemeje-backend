@@ -18,8 +18,9 @@ const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
 // Log API status on boot
-console.log("SMM_API_URL:", "https://delixgainske.com/api/v2");
-console.log("SMM_API_KEY:", process.env.SMM_API_KEY ? "Loaded ✅" : "Missing ❌");
+console.log("--- PROVIDER STATUS ---");
+console.log("P1 (Delixgains):", "https://delixgainske.com/api/v2", process.env.SMM_API_KEY ? "✅" : "❌");
+console.log("P2 (SMM Africa):", process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", process.env.API_KEY_PROVIDER2 ? "✅" : "❌");
 
 const app = express();
 
@@ -176,22 +177,47 @@ app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
     
+    // Check if Provider 2 Services need fetching too
     if (!services.length) {
-      const url = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
-      const response = await axios.get(url);
-      const list = Array.isArray(response.data) ? response.data : Object.values(response.data).flat();
+      // Logic for P1
+      const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
+      const response1 = await axios.get(url1);
+      const list1 = Array.isArray(response1.data) ? response1.data : Object.values(response1.data).flat();
 
-      services = list.map((s, i) => ({
+      const p1Mapped = list1.map((s, i) => ({
         serviceId: String(s.service || s.id || i),
         name: cleanServiceName(s.name),
         rate: Number(s.rate || 0),
         min: Number(s.min || 1),
         max: Number(s.max || 10000),
         category: s.category || "General",
-        platform: detectPlatform(s)
+        platform: detectPlatform(s),
+        provider: "PROVIDER1"
       }));
+
+      // Logic for P2 (SMM Africa)
+      let p2Mapped = [];
+      if (process.env.API_KEY_PROVIDER2) {
+        const response2 = await axios.post(process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", {
+           key: process.env.API_KEY_PROVIDER2,
+           action: "services"
+        });
+        const list2 = Array.isArray(response2.data) ? response2.data : [];
+        p2Mapped = list2.map(s => ({
+          serviceId: String(s.service),
+          name: cleanServiceName(s.name),
+          rate: Number(s.rate || 0),
+          min: Number(s.min || 1),
+          max: Number(s.max || 10000),
+          category: s.category || "General",
+          platform: detectPlatform(s),
+          provider: "PROVIDER2"
+        }));
+      }
+
       await Service.deleteMany({});
-      await Service.insertMany(services);
+      await Service.insertMany([...p1Mapped, ...p2Mapped]);
+      services = await Service.find();
     }
 
     const grouped = {};
@@ -229,8 +255,24 @@ app.post("/api/order", auth, async (req, res) => {
       return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost.toFixed(2)}` });
     }
 
-    const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
-    const providerRes = await axios.get(providerUrl);
+    let providerRes;
+    const providerType = service.provider || "PROVIDER1";
+
+    if (providerType === "PROVIDER2") {
+        // SMM Africa Logic (JSON POST)
+        providerRes = await axios.post(process.env.API_URL_PROVIDER2, {
+            key: process.env.API_KEY_PROVIDER2,
+            action: "add",
+            service: serviceId,
+            link: link,
+            quantity: quantity,
+            source_flow: "api_v3"
+        });
+    } else {
+        // Delixgains Logic (GET)
+        const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
+        providerRes = await axios.get(providerUrl);
+    }
     
     if (!providerRes.data || !providerRes.data.order) {
         log("Provider Rejection: " + JSON.stringify(providerRes.data));
@@ -248,7 +290,9 @@ app.post("/api/order", auth, async (req, res) => {
       link: link,
       quantity: quantity,
       cost: totalCost,
-      status: "pending"
+      status: "pending",
+      provider: providerType, // Track which provider handled this
+      providerCharge: providerRes.data.charged || 0
     });
 
     await giveReferralBonus(user._id, totalCost);
@@ -275,16 +319,25 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const orders = await Order.find({ 
         userId: req.user.id, 
-        status: { $in: ["pending", "processing", "inprogress", "Pending", "Processing", "In progress", "Partial"] } 
+        status: { $in: ["pending", "processing", "inprogress", "Pending", "Processing", "In progress", "Partial", "queued"] } 
     });
 
     for (let order of orders) {
       if (order.orderId) { 
-        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
-        const response = await axios.get(url);
+        let response;
+        if (order.provider === "PROVIDER2") {
+            response = await axios.post(process.env.API_URL_PROVIDER2, {
+                key: process.env.API_KEY_PROVIDER2,
+                action: "status",
+                order: order.orderId
+            });
+        } else {
+            const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
+            response = await axios.get(url);
+        }
         
         if (response.data && response.data.status) {
-          order.status = response.data.status; 
+          order.status = response.data.status.toLowerCase(); 
           if(response.data.remains) order.remains = response.data.remains;
           if(response.data.start_count) order.startCount = response.data.start_count;
           
@@ -306,11 +359,20 @@ app.post('/api/refill', auth, async (req, res) => {
         const order = await Order.findById(orderId);
         if (!order) return res.status(404).json({ error: "Order not found" });
 
-        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId}`;
-        const response = await axios.get(url);
-        const data = response.data;
+        let response;
+        if (order.provider === "PROVIDER2") {
+            response = await axios.post(process.env.API_URL_PROVIDER2, {
+                key: process.env.API_KEY_PROVIDER2,
+                action: "refill",
+                order: order.orderId
+            });
+        } else {
+            const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId}`;
+            response = await axios.get(url);
+        }
 
-        if (data.refill || data.status === "success" || data.refill_id) {
+        const data = response.data;
+        if (data.refill || data.status === "success" || data.refill_id || data.success) {
             res.json({ success: true, message: "Refill request sent successfully!" });
         } else {
             res.json({ success: false, error: data.error || "Refill not available for this order yet." });
