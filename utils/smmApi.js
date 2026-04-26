@@ -1,19 +1,16 @@
 const axios = require("axios");
 
-// ================= CONFIG =================
-const API_URL =
-  process.env.SMM_API_URL || "https://delixgainske.com/api/v2";
+// ================= CONFIG PROVIDER 1 =================
+const API_URL_1 = process.env.SMM_API_URL || "https://delixgainske.com/api/v2";
+const API_KEY_1 = process.env.SMM_API_KEY;
 
-const API_KEY = process.env.SMM_API_KEY;
+// ================= CONFIG PROVIDER 2 (SMM AFRICA) =================
+const API_URL_2 = process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3";
+const API_KEY_2 = process.env.API_KEY_PROVIDER2;
 
 // ================= VALIDATION =================
-if (!API_KEY) {
-  console.error("❌ SMM_API_KEY missing in environment variables");
-}
-
-if (!API_URL) {
-  console.error("❌ SMM_API_URL missing in environment variables");
-}
+if (!API_KEY_1) console.error("❌ SMM_API_KEY (Provider 1) missing");
+if (!API_KEY_2) console.error("❌ API_KEY_PROVIDER2 (Provider 2) missing");
 
 // ================= DEBUG MODE =================
 const DEBUG = true;
@@ -21,130 +18,146 @@ const DEBUG = true;
 // ================= SAFE NORMALIZER =================
 function normalizeResponse(data) {
   if (!data) return [];
-
   if (Array.isArray(data)) return data;
-
   if (typeof data === "object") {
     return Object.values(data).flat();
   }
-
   return [];
 }
 
 // ================= CORE REQUEST =================
-async function request(params) {
-  if (!API_KEY || !API_URL) {
-    console.error("❌ API CONFIG ERROR");
+/**
+ * Modified to support both Providers
+ * providerNum: 1 or 2
+ */
+async function request(params, providerNum = 1) {
+  const url = providerNum === 2 ? API_URL_2 : API_URL_1;
+  const key = providerNum === 2 ? API_KEY_2 : API_KEY_1;
+
+  if (!key || !url) {
+    console.error(`❌ API CONFIG ERROR FOR PROVIDER ${providerNum}`);
     return null;
   }
 
   try {
-    const res = await axios.get(API_URL, {
-      params: {
-        key: API_KEY,
+    let res;
+    
+    // Provider 2 (SMM Africa) prefers JSON POST
+    if (providerNum === 2) {
+      res = await axios.post(url, {
+        key: key,
         ...params
-      },
-      timeout: 20000
-    });
+      }, {
+        timeout: 20000,
+        headers: { "Content-Type": "application/json" }
+      });
+    } else {
+      // Provider 1 uses the original GET method
+      res = await axios.get(url, {
+        params: {
+          key: key,
+          ...params
+        },
+        timeout: 20000
+      });
+    }
 
     if (DEBUG) {
-      console.log("📡 SMM REQUEST:", params);
-      console.log("📥 SMM RESPONSE TYPE:", typeof res.data);
+      console.log(`📡 SMM REQUEST (P${providerNum}):`, params);
+      console.log(`📥 SMM RESPONSE TYPE (P${providerNum}):`, typeof res.data);
     }
 
     return res.data;
 
   } catch (err) {
-    console.error("❌ SMM API ERROR:");
+    console.error(`❌ SMM API ERROR (P${providerNum}):`);
     console.error(err?.response?.data || err.message);
-
     return null;
   }
 }
 
 // ================= SERVICES =================
-async function getServices() {
-  const data = await request({ action: "services" });
-
+async function getServices(providerNum = 1) {
+  const data = await request({ action: "services" }, providerNum);
   const services = normalizeResponse(data);
 
   if (!services.length) {
-    console.error("❌ Invalid or empty services response from provider");
+    console.error(`❌ Empty services response from Provider ${providerNum}`);
     return [];
   }
 
-  // SAFE MAP (prevents undefined crashes)
   return services.map((s, i) => ({
     serviceId: String(s.service || s.id || `srv_${i}`),
     name: s.name || "Unnamed Service",
     rate: Number(s.rate || 0),
     min: Number(s.min || 1),
     max: Number(s.max || 10000),
-    category: s.category || "Other"
+    category: s.category || "Other",
+    provider: providerNum // Track which provider this service belongs to
   }));
 }
 
 // ================= CREATE ORDER =================
-async function createOrder(service, link, quantity) {
+async function createOrder(service, link, quantity, providerNum = 1) {
   if (!service || !link || !quantity) {
     console.error("❌ Missing order params");
     return null;
   }
 
-  return await request({
+  const payload = {
     action: "add",
     service,
     link,
     quantity
-  });
+  };
+
+  // SMM Africa v3 documentation suggests adding source_flow
+  if (providerNum === 2) payload.source_flow = 'api_v3';
+
+  return await request(payload, providerNum);
 }
 
 // ================= STATUS =================
-async function getStatus(order) {
+async function getStatus(order, providerNum = 1) {
   return await request({
     action: "status",
     order
-  });
+  }, providerNum);
 }
 
 // ================= MULTIPLE STATUS =================
-async function getMultipleStatus(orders) {
+async function getMultipleStatus(orders, providerNum = 1) {
   return await request({
     action: "status",
-    orders: Array.isArray(orders)
-      ? orders.join(",")
-      : orders
-  });
+    orders: Array.isArray(orders) ? orders.join(",") : orders
+  }, providerNum);
 }
 
 // ================= BALANCE =================
-async function getBalance() {
-  return await request({ action: "balance" });
+async function getBalance(providerNum = 1) {
+  return await request({ action: "balance" }, providerNum);
 }
 
 // ================= REFILL =================
-async function refill(order) {
+async function refill(order, providerNum = 1) {
   return await request({
     action: "refill",
     order
-  });
+  }, providerNum);
 }
 
 // ================= CANCEL =================
-async function cancel(order) {
+async function cancel(order, providerNum = 1) {
   return await request({
     action: "cancel",
     order
-  });
+  }, providerNum);
 }
 
 // ================= HEALTH CHECK =================
-async function testConnection() {
-  const res = await request({ action: "balance" });
-
-  if (!res) return false;
-
-  return true;
+async function testConnection(providerNum = 1) {
+  const res = await request({ action: "balance" }, providerNum);
+  return !!res;
 }
 
 // ================= EXPORTS =================
