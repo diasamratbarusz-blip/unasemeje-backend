@@ -7,44 +7,73 @@ const Service = require("../../models/Service");
    ENV CHECK SAFETY
 ========================= */
 if (!process.env.SMM_API_URL || !process.env.SMM_API_KEY) {
-  console.error("❌ Missing SMM_API_URL or SMM_API_KEY");
+  console.error("❌ Missing SMM_API_URL or SMM_API_KEY (Provider 1)");
+}
+if (!process.env.API_URL_PROVIDER2 || !process.env.API_KEY_PROVIDER2) {
+  console.warn("⚠️ Missing API_URL_PROVIDER2 or API_KEY_PROVIDER2 (SMM Africa)");
 }
 
 /* =========================
-   FETCH FROM PROVIDER
+   FETCH FROM PROVIDERS
 ========================= */
 const fetchProviderServices = async () => {
+  let allServices = [];
+
+  // --- PROVIDER 1 FETCH (Original) ---
   try {
-    const url = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
+    const url1 = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
+    const response1 = await axios.get(url1, { timeout: 20000 });
+    const raw1 = response1.data;
 
-    const response = await axios.get(url, {
-      timeout: 20000
-    });
-
-    const raw = response.data;
-
-    if (!raw) throw new Error("Empty provider response");
-
-    let services = Array.isArray(raw)
-      ? raw
-      : typeof raw === "object"
-        ? Object.values(raw).flat()
-        : [];
-
-    return services.map((s) => ({
-      serviceId: String(s.service || s.id || ""),
-      name: s.name || "Unnamed Service",
-      rate: Number(s.rate || s.cost || 0),
-      min: Number(s.min || 1),
-      max: Number(s.max || 100000),
-      category: s.category || "Other",
-      status: "active"
-    }));
-
+    if (raw1) {
+      const services1 = Array.isArray(raw1) ? raw1 : typeof raw1 === "object" ? Object.values(raw1).flat() : [];
+      const mapped1 = services1.map((s) => ({
+        serviceId: String(s.service || s.id || ""),
+        name: s.name || "Unnamed Service",
+        rate: Number(s.rate || s.cost || 0),
+        min: Number(s.min || 1),
+        max: Number(s.max || 100000),
+        category: s.category || "Other",
+        status: "active",
+        provider: "PROVIDER1" // Tagging origin
+      }));
+      allServices = [...allServices, ...mapped1];
+    }
   } catch (err) {
-    console.error("❌ Provider fetch error:", err.message);
-    return [];
+    console.error("❌ Provider 1 fetch error:", err.message);
   }
+
+  // --- PROVIDER 2 FETCH (SMM Africa v3 JSON POST) ---
+  try {
+    if (process.env.API_KEY_PROVIDER2) {
+      const response2 = await axios.post(process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", {
+        key: process.env.API_KEY_PROVIDER2,
+        action: "services"
+      }, {
+        headers: { "Content-Type": "application/json" },
+        timeout: 20000
+      });
+
+      const raw2 = response2.data;
+      if (raw2 && Array.isArray(raw2)) {
+        const mapped2 = raw2.map((s) => ({
+          serviceId: String(s.service || ""),
+          name: s.name || "Unnamed Service",
+          rate: Number(s.rate || 0),
+          min: Number(s.min || 1),
+          max: Number(s.max || 100000),
+          category: s.category || "Other",
+          status: "active",
+          provider: "PROVIDER2" // Tagging origin
+        }));
+        allServices = [...allServices, ...mapped2];
+      }
+    }
+  } catch (err) {
+    console.error("❌ Provider 2 fetch error:", err.message);
+  }
+
+  return allServices;
 };
 
 /* =========================
@@ -56,14 +85,13 @@ const syncServicesToDB = async (services) => {
 
     const ops = services.map((s) => ({
       updateOne: {
-        filter: { serviceId: s.serviceId },
+        filter: { serviceId: s.serviceId, provider: s.provider }, // Filter by ID AND Provider
         update: { $set: s },
         upsert: true
       }
     }));
 
     await Service.bulkWrite(ops);
-
   } catch (err) {
     console.error("❌ DB sync error:", err.message);
   }
@@ -80,6 +108,7 @@ function detectPlatform(text = "", category = "") {
   if (t.includes("youtube")) return "YouTube";
   if (t.includes("facebook")) return "Facebook";
   if (t.includes("twitter") || t.includes("x")) return "Twitter/X";
+  if (t.includes("telegram")) return "Telegram";
 
   return "Other";
 }
@@ -108,9 +137,9 @@ router.get("/all", async (req, res) => {
     let services = await Service.find({ status: "active" });
 
     if (!services.length) {
-      const provider = await fetchProviderServices();
-      await syncServicesToDB(provider);
-      services = provider;
+      const providerServices = await fetchProviderServices();
+      await syncServicesToDB(providerServices);
+      services = await Service.find({ status: "active" });
     }
 
     res.json({
@@ -120,11 +149,7 @@ router.get("/all", async (req, res) => {
 
   } catch (err) {
     console.error("❌ FLAT SERVICES ERROR:", err.message);
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to load services"
-    });
+    res.status(500).json({ success: false, error: "Failed to load services" });
   }
 });
 
@@ -136,9 +161,9 @@ router.get("/", async (req, res) => {
     let services = await Service.find({ status: "active" });
 
     if (!services.length) {
-      const provider = await fetchProviderServices();
-      await syncServicesToDB(provider);
-      services = provider;
+      const providerServices = await fetchProviderServices();
+      await syncServicesToDB(providerServices);
+      services = await Service.find({ status: "active" });
     }
 
     const grouped = {};
@@ -156,7 +181,8 @@ router.get("/", async (req, res) => {
         rate: Number(s.rate || 0).toFixed(2),
         min: s.min,
         max: s.max,
-        category: s.category
+        category: s.category,
+        provider: s.provider
       });
     });
 
@@ -167,11 +193,7 @@ router.get("/", async (req, res) => {
 
   } catch (err) {
     console.error("❌ GROUPED SERVICES ERROR:", err.message);
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to load services"
-    });
+    res.status(500).json({ success: false, error: "Failed to load services" });
   }
 });
 
@@ -186,24 +208,14 @@ router.get("/:serviceId", async (req, res) => {
     });
 
     if (!service) {
-      return res.status(404).json({
-        success: false,
-        error: "Service not found"
-      });
+      return res.status(404).json({ success: false, error: "Service not found" });
     }
 
-    res.json({
-      success: true,
-      data: service
-    });
+    res.json({ success: true, data: service });
 
   } catch (err) {
     console.error("❌ SINGLE SERVICE ERROR:", err.message);
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to fetch service"
-    });
+    res.status(500).json({ success: false, error: "Failed to fetch service" });
   }
 });
 
