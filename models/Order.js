@@ -48,7 +48,7 @@ const OrderSchema = new mongoose.Schema(
 
     /* ================= PRICING ================= */
     cost: {
-      type: Number,
+      type: Number, // What the customer paid you in KES
       required: true,
       default: 0
     },
@@ -59,8 +59,21 @@ const OrderSchema = new mongoose.Schema(
       uppercase: true
     },
 
+    providerCharge: {
+      type: Number, // What the provider charged you (useful for SMM Africa USD tracking)
+      default: 0
+    },
+
     /* ================= PROVIDER SYNC ================= */
-    // This MUST be 'orderId' to match server.js providerRes.data.order
+    // Identifies which API credentials to use (PROVIDER1 or PROVIDER2)
+    provider: {
+      type: String,
+      default: "PROVIDER1",
+      enum: ["PROVIDER1", "PROVIDER2"],
+      index: true
+    },
+
+    // This stores the external ID returned by the provider (SMM Africa order ID)
     orderId: {
       type: String,
       default: null,
@@ -71,6 +84,8 @@ const OrderSchema = new mongoose.Schema(
     status: {
       type: String,
       default: "pending",
+      enum: ["pending", "processing", "inprogress", "completed", "partial", "canceled", "refunded"],
+      lowercase: true,
       index: true
     },
 
