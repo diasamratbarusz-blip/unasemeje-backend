@@ -136,12 +136,20 @@ app.get("/", (req, res) => res.send("🚀 unasemeje ø dia SMM Backend Operation
 
 app.post("/api/register", async (req, res) => {
   try {
-    const { email, password, phone, referralCode } = req.body;
-    const exists = await User.findOne({ $or: [{ email }, { phone }] });
-    if (exists) return res.status(400).json({ error: "Email or Phone already registered" });
+    const { username, email, password, phone, referralCode } = req.body;
+    
+    // Check if user already exists via email, phone, or the new username
+    const exists = await User.findOne({ 
+      $or: [{ email }, { phone }, { username: username?.toLowerCase() }] 
+    });
+    
+    if (exists) return res.status(400).json({ error: "Account already exists (Email, Phone, or Username taken)" });
 
     const newUser = await User.create({
-      email, password, phone,
+      username: username?.toLowerCase(),
+      email, 
+      password, 
+      phone,
       referralCode: generateReferralCode(),
       referredBy: referralCode || null,
       balance: 0
@@ -151,12 +159,21 @@ app.post("/api/register", async (req, res) => {
 });
 
 app.post("/api/login", async (req, res) => {
-  const { email, password } = req.body;
-  const user = await User.findOne({ email, password });
+  const { identifier, password } = req.body; // 'identifier' replaces 'email' to allow username login
+  
+  // Look for user by email OR username
+  const user = await User.findOne({ 
+    $or: [
+        { email: identifier?.toLowerCase() }, 
+        { username: identifier?.toLowerCase() }
+    ],
+    password 
+  });
+
   if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
   const token = jwt.sign(
-    { id: user._id, email: user.email, phone: user.phone },
+    { id: user._id, email: user.email, phone: user.phone, username: user.username },
     process.env.JWT_SECRET, { expiresIn: "7d" }
   );
   res.json({ token, balance: user.balance });
