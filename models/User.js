@@ -2,11 +2,11 @@ const mongoose = require("mongoose");
 const crypto = require("crypto");
 
 /**
- * =========================
- * USER SCHEMA (SMM PANEL)
- * =========================
+ * =========================================
+ * USER SCHEMA (unasemeje ø dia SMM PANEL)
+ * =========================================
  * Handles:
- * - Authentication
+ * - Authentication (Username, Email, Phone)
  * - Balance system
  * - Admin role
  * - API key system
@@ -19,7 +19,19 @@ function generateReferralCode() {
 
 const UserSchema = new mongoose.Schema(
   {
-    /* ================= BASIC INFO ================= */
+    /* ================= AUTHENTICATION INFO ================= */
+    
+    // NEW: Added username to support your new login requirement
+    // 'sparse: true' allows old accounts that don't have a username to coexist
+    username: {
+      type: String,
+      unique: true,
+      sparse: true,
+      lowercase: true,
+      trim: true,
+      index: true
+    },
+
     email: {
       type: String,
       required: true,
@@ -36,8 +48,10 @@ const UserSchema = new mongoose.Schema(
 
     phone: {
       type: String,
-      default: null,
-      trim: true
+      required: true, // Updated to required based on your new registration parameters
+      unique: true,
+      trim: true,
+      index: true
     },
 
     /* ================= BALANCE ================= */
@@ -115,6 +129,8 @@ const UserSchema = new mongoose.Schema(
 );
 
 /* ================= INDEXES ================= */
+// Optimized for quick lookup during login (username, email, or phone)
+UserSchema.index({ username: 1 });
 UserSchema.index({ email: 1 });
 UserSchema.index({ phone: 1 });
 UserSchema.index({ role: 1 });
