@@ -18,7 +18,7 @@ const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
 // Log API status on boot
-console.log("--- PROVIDER STATUS ---");
+console.log("--- UNASEMEJE SMM PROVIDER STATUS ---");
 console.log("P1 (Delixgains):", "https://delixgainske.com/api/v2", process.env.SMM_API_KEY ? "✅" : "❌");
 console.log("P2 (SMM Africa):", process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", process.env.API_KEY_PROVIDER2 ? "✅" : "❌");
 
@@ -39,7 +39,7 @@ const ADMIN_PHONE = "0715509440";
 
 // CONNECT DB
 connectDB();
-log("Server starting...");
+log("Unasemeje SMM Server starting...");
 
 /**
  * =========================================
@@ -85,7 +85,7 @@ async function giveReferralBonus(userId, orderCost) {
   const referrer = await User.findOne({ referralCode: user.referredBy });
   if (!referrer) return;
 
-  const bonus = orderCost * 0.10; 
+  const bonus = orderCost * 0.10; // 10% Referral Bonus
   referrer.balance += bonus;
   referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
 
@@ -132,7 +132,7 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 
-app.get("/", (req, res) => res.send("🚀 Unasemeje SMM Backend Operational"));
+app.get("/", (req, res) => res.send("🚀 unasemeje ø dia SMM Backend Operational"));
 
 app.post("/api/register", async (req, res) => {
   try {
@@ -177,9 +177,8 @@ app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
     
-    // Check if Provider 2 Services need fetching too
     if (!services.length) {
-      // Logic for P1
+      // P1: Delixgains Logic
       const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response1 = await axios.get(url1);
       const list1 = Array.isArray(response1.data) ? response1.data : Object.values(response1.data).flat();
@@ -195,7 +194,7 @@ app.get("/api/services", async (req, res) => {
         provider: "PROVIDER1"
       }));
 
-      // Logic for P2 (SMM Africa)
+      // P2: SMM Africa Logic
       let p2Mapped = [];
       if (process.env.API_KEY_PROVIDER2) {
         const response2 = await axios.post(process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", {
@@ -259,7 +258,6 @@ app.post("/api/order", auth, async (req, res) => {
     const providerType = service.provider || "PROVIDER1";
 
     if (providerType === "PROVIDER2") {
-        // SMM Africa Logic (JSON POST)
         providerRes = await axios.post(process.env.API_URL_PROVIDER2, {
             key: process.env.API_KEY_PROVIDER2,
             action: "add",
@@ -269,7 +267,6 @@ app.post("/api/order", auth, async (req, res) => {
             source_flow: "api_v3"
         });
     } else {
-        // Delixgains Logic (GET)
         const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
         providerRes = await axios.get(providerUrl);
     }
@@ -291,7 +288,7 @@ app.post("/api/order", auth, async (req, res) => {
       quantity: quantity,
       cost: totalCost,
       status: "pending",
-      provider: providerType, // Track which provider handled this
+      provider: providerType,
       providerCharge: providerRes.data.charged || 0
     });
 
@@ -393,7 +390,6 @@ app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { message, phone, amount } = req.body;
     
-    // 1. Find the MPESA code
     const codeMatch = message?.match(/[A-Z0-9]{8,12}/);
     let extractedCode = codeMatch ? codeMatch[0] : (req.body.transactionCode || req.body.code);
     
@@ -403,7 +399,6 @@ app.post("/api/deposit", auth, async (req, res) => {
 
     const finalCode = extractedCode.toUpperCase();
 
-    // 2. Check for duplicates in BOTH possible fields
     const exists = await Deposit.findOne({ 
         $or: [{ transactionCode: finalCode }, { code: finalCode }] 
     });
@@ -412,15 +407,13 @@ app.post("/api/deposit", auth, async (req, res) => {
         return res.status(400).json({ error: "This code has already been used. Please use a new message." });
     }
 
-    // 3. Create the record - We send 'code' AND 'transactionCode' 
-    // to prevent the "duplicate key error { code: null }"
     const depositData = {
       userId: req.user.id,
       userEmail: req.user.email || "N/A",
       phone: phone || "N/A",
       amount: Number(amount) || 0,
-      transactionCode: finalCode, // Your preferred field
-      code: finalCode,            // Field required by the database index
+      transactionCode: finalCode,
+      code: finalCode,            
       message: message || "Manual Submission",
       status: "pending"
     };
@@ -429,7 +422,7 @@ app.post("/api/deposit", auth, async (req, res) => {
 
     res.json({ success: true, message: "Deposit submitted! Admin will approve it shortly." });
   } catch (error) {
-    console.error("DEPOSIT FINAL FIX LOG:", error.message);
+    console.error("DEPOSIT ERROR:", error.message);
     res.status(500).json({ error: "Server error: " + error.message });
   }
 });
@@ -479,5 +472,5 @@ app.get("/api/admin/users", auth, isAdmin, async (req, res) => {
  */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 unasemeje ø dia SMM running on port ${PORT}`);
 });
