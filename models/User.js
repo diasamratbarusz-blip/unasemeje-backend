@@ -7,10 +7,10 @@ const crypto = require("crypto");
  * =========================================
  * Handles:
  * - Authentication (Username, Email, Phone)
- * - Balance system
- * - Admin role
- * - API key system
- * - Referral system (FIXED)
+ * - Balance system (KES/USD compatible)
+ * - Admin role & Security status
+ * - API key system for resellers
+ * - Referral system (Hex-based tracking)
  */
 
 function generateReferralCode() {
@@ -21,8 +21,10 @@ const UserSchema = new mongoose.Schema(
   {
     /* ================= AUTHENTICATION INFO ================= */
     
-    // NEW: Added username to support your new login requirement
-    // 'sparse: true' allows old accounts that don't have a username to coexist
+    /** 
+     * NEW: Username support for 'unasemeje ø dia' branding. 
+     * 'sparse: true' ensures compatibility with legacy records if necessary.
+     */
     username: {
       type: String,
       unique: true,
@@ -46,22 +48,26 @@ const UserSchema = new mongoose.Schema(
       required: true
     },
 
+    /** 
+     * Phone is required for M-Pesa STK Push integrations 
+     * common in the Kenyan regional market.
+     */
     phone: {
       type: String,
-      required: true, // Updated to required based on your new registration parameters
+      required: true, 
       unique: true,
       trim: true,
       index: true
     },
 
-    /* ================= BALANCE ================= */
+    /* ================= FINANCIAL DATA ================= */
     balance: {
       type: Number,
       default: 0,
       min: 0
     },
 
-    /* ================= ROLE SYSTEM ================= */
+    /* ================= ROLE & SECURITY ================= */
     role: {
       type: String,
       enum: ["user", "admin"],
@@ -90,9 +96,9 @@ const UserSchema = new mongoose.Schema(
       default: null
     },
 
-    /* ================= REFERRAL SYSTEM (FIXED) ================= */
+    /* ================= REFERRAL SYSTEM ================= */
 
-    // Unique referral code for each user
+    // Unique hex code assigned to each user upon creation
     referralCode: {
       type: String,
       unique: true,
@@ -100,19 +106,19 @@ const UserSchema = new mongoose.Schema(
       index: true
     },
 
-    // IMPORTANT: must be STRING code (NOT ObjectId)
+    // Stores the referral code of the inviter
     referredBy: {
       type: String,
       default: null
     },
 
-    // earnings from referrals
+    // Total accumulated commission from referrals
     referralEarnings: {
       type: Number,
       default: 0
     },
 
-    /* ================= OPTIONAL STATS ================= */
+    /* ================= BUSINESS STATS ================= */
     totalOrders: {
       type: Number,
       default: 0
@@ -124,12 +130,16 @@ const UserSchema = new mongoose.Schema(
     }
   },
   {
+    // Automatically creates 'createdAt' and 'updatedAt' fields
     timestamps: true
   }
 );
 
-/* ================= INDEXES ================= */
-// Optimized for quick lookup during login (username, email, or phone)
+/* ================= DATABASE INDEXING ================= */
+/**
+ * Optimized for high-speed lookups during login (identifier check) 
+ * and referral tracking.
+ */
 UserSchema.index({ username: 1 });
 UserSchema.index({ email: 1 });
 UserSchema.index({ phone: 1 });
