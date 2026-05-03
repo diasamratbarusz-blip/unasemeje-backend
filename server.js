@@ -155,28 +155,35 @@ app.post("/api/register", async (req, res) => {
       balance: 0
     });
     res.json({ message: "Registration successful", referralCode: newUser.referralCode });
-  } catch (err) { res.status(500).json({ error: "Registration failed" }); }
+  } catch (err) { 
+    log("Registration Error: " + err.message);
+    res.status(500).json({ error: "Registration failed" }); 
+  }
 });
 
 app.post("/api/login", async (req, res) => {
-  const { identifier, password } = req.body; // 'identifier' replaces 'email' to allow username login
-  
-  // Look for user by email OR username
-  const user = await User.findOne({ 
-    $or: [
-        { email: identifier?.toLowerCase() }, 
-        { username: identifier?.toLowerCase() }
-    ],
-    password 
-  });
+  try {
+    const { identifier, password } = req.body; 
+    
+    // Look for user by email OR username
+    const user = await User.findOne({ 
+      $or: [
+          { email: identifier?.toLowerCase() }, 
+          { username: identifier?.toLowerCase() }
+      ],
+      password 
+    });
 
-  if (!user) return res.status(400).json({ error: "Invalid credentials" });
+    if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
-  const token = jwt.sign(
-    { id: user._id, email: user.email, phone: user.phone, username: user.username },
-    process.env.JWT_SECRET, { expiresIn: "7d" }
-  );
-  res.json({ token, balance: user.balance });
+    const token = jwt.sign(
+      { id: user._id, email: user.email, phone: user.phone, username: user.username },
+      process.env.JWT_SECRET, { expiresIn: "7d" }
+    );
+    res.json({ token, balance: user.balance });
+  } catch (err) {
+    res.status(500).json({ error: "Login failed" });
+  }
 });
 
 app.get("/api/me", auth, async (req, res) => {
