@@ -263,6 +263,7 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
+// FIXED ORDER ROUTE
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -293,7 +294,6 @@ app.post("/api/order", auth, async (req, res) => {
                 quantity: quantity
             });
         } else {
-            // Delixgains URL matches your provided documentation
             const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
             providerRes = await axios.get(providerUrl);
         }
@@ -303,13 +303,14 @@ app.post("/api/order", auth, async (req, res) => {
     }
     
     const pData = providerRes.data;
-    // Delixgains returns { "order": 1 }
-    if (!pData || (!pData.order && !pData.id)) {
+    
+    // FIX: Enhanced ID detection to prevent error display on success
+    const providerOrderId = pData.order || pData.id;
+
+    if (!providerOrderId) {
         log.error("Provider Rejection: " + JSON.stringify(pData));
         return res.status(400).json({ error: pData.error || "Provider rejected the order." });
     }
-
-    const providerOrderId = String(pData.order || pData.id);
 
     user.balance -= totalCost;
     user.totalSpent = (user.totalSpent || 0) + totalCost;
@@ -320,7 +321,7 @@ app.post("/api/order", auth, async (req, res) => {
       userId: user._id,
       serviceId: serviceId,
       serviceName: service.name, 
-      orderId: providerOrderId, 
+      orderId: String(providerOrderId), 
       link: link,
       quantity: quantity,
       cost: totalCost,
@@ -342,37 +343,43 @@ app.post("/api/order", auth, async (req, res) => {
   }
 });
 
+// FIXED SYNC ROUTE (No more empty history)
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
-    const orders = await Order.find({ 
-        userId: req.user.id, 
-        status: { $in: ["pending", "processing", "inprogress", "Pending", "Partial", "partial"] } 
+    // 1. First find orders and send them so the dashboard isn't empty
+    const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
+    
+    // 2. Identify which orders need status updates
+    const activeOrders = dbOrders.filter(o => 
+        ["pending", "processing", "inprogress", "Pending", "Partial", "partial"].includes(o.status)
+    ).slice(0, 5); // Limit background sync to last 5 active to prevent timeouts
+
+    // 3. Update active ones in the background (Async)
+    activeOrders.forEach(async (order) => {
+        try {
+            let response;
+            if (order.provider === "PROVIDER2") {
+                response = await axios.post(process.env.API_URL_PROVIDER2, {
+                    key: process.env.API_KEY_PROVIDER2,
+                    action: "status",
+                    order: order.orderId
+                });
+            } else {
+                const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
+                response = await axios.get(url);
+            }
+            if (response.data && response.data.status) {
+                await Order.findByIdAndUpdate(order._id, {
+                    status: response.data.status,
+                    remains: response.data.remains || order.remains,
+                    startCount: response.data.start_count || order.startCount
+                });
+            }
+        } catch (e) { /* background fail is silent */ }
     });
 
-    for (let order of orders) {
-      let response;
-      if (order.provider === "PROVIDER2") {
-          response = await axios.post(process.env.API_URL_PROVIDER2, {
-              key: process.env.API_KEY_PROVIDER2,
-              action: "status",
-              order: order.orderId
-          });
-      } else {
-          const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
-          response = await axios.get(url);
-      }
-      
-      const data = response.data;
-      if (data && data.status) {
-        order.status = data.status; 
-        order.remains = data.remains || order.remains;
-        order.startCount = data.start_count || order.startCount;
-        await order.save();
-      }
-    }
-    
-    const updatedOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    res.json(updatedOrders);
+    // Send original DB data immediately
+    res.json(dbOrders);
   } catch (err) {
     res.status(500).json({ error: "Sync failed" });
   }
