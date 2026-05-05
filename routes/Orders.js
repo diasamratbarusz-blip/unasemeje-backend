@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const axios = require("axios");
 const Order = require("../models/Order"); 
+const User = require("../models/User"); // Added to handle balance deduction
 
 /**
  * =========================================
@@ -12,6 +13,7 @@ router.post("/", async (req, res) => {
   try {
     const { serviceId, link, quantity, userId, rate, serviceName } = req.body;
 
+    // 1. Basic Validation
     if (!serviceId || !link || !quantity || !userId) {
       return res.status(400).json({
         success: false,
@@ -19,7 +21,20 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Prepare API Request to Provider
+    // 2. Check User Balance & Calculate Cost
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    const orderCost = (parseFloat(rate) / 1000) * parseInt(quantity);
+    
+    if (user.balance < orderCost) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient balance. Required: KES ${orderCost.toFixed(2)}`
+      });
+    }
+
+    // 3. Prepare API Request to Provider
     const params = new URLSearchParams();
     params.append("key", process.env.SMM_API_KEY);
     params.append("action", "add");
@@ -31,6 +46,7 @@ router.post("/", async (req, res) => {
       timeout: 15000 
     });
 
+    // 4. Handle Provider Errors
     if (response.data.error) {
       return res.status(400).json({
         success: false,
@@ -45,15 +61,21 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // 5. Deduct Balance from User
+    user.balance -= orderCost;
+    user.totalSpent += orderCost;
+    user.totalOrders += 1;
+    await user.save();
+
+    // 6. Save to Database (Matching your Order.js Model)
     const newOrder = new Order({
-      userId,
+      userId: user._id,
       serviceId,
       serviceName: serviceName || "SMM Service",
       link,
       quantity,
-      rate: rate || 0,
-      providerOrderId: response.data.order, // This maps to o.orderId in your frontend
-      providerResponse: response.data,
+      cost: orderCost, // Mapped to 'cost' in Model
+      orderId: response.data.order, // Mapped to 'orderId' in Model
       status: "pending"
     });
 
@@ -63,14 +85,15 @@ router.post("/", async (req, res) => {
       success: true,
       message: "Order placed successfully",
       orderId: response.data.order,
+      balance: user.balance,
       internalId: newOrder._id
     });
 
   } catch (err) {
-    console.error("❌ ORDER ERROR:", err.message);
+    console.error("❌ ORDER ROUTE ERROR:", err.message);
     res.status(500).json({
       success: false,
-      message: "Internal error occurred",
+      message: "Internal error occurred during order placement",
       error: err.message
     });
   }
@@ -104,18 +127,17 @@ router.get("/user/:userId", async (req, res) => {
  */
 router.get("/sync-all/:userId", async (req, res) => {
     try {
-        // Only sync orders that aren't finished yet
         const pendingOrders = await Order.find({ 
             userId: req.params.userId, 
             status: { $in: ["pending", "processing", "inprogress", "pending_refill"] } 
         });
 
         for (let order of pendingOrders) {
-            if (order.providerOrderId) {
+            if (order.orderId) { // Using 'orderId' as per your Model
                 const params = new URLSearchParams();
                 params.append("key", process.env.SMM_API_KEY);
                 params.append("action", "status");
-                params.append("order", order.providerOrderId);
+                params.append("order", order.orderId);
 
                 const response = await axios.post(process.env.SMM_API_URL, params);
 
@@ -142,7 +164,7 @@ router.get("/sync-all/:userId", async (req, res) => {
  */
 router.post("/refill", async (req, res) => {
     try {
-        const { orderId } = req.body; // providerOrderId from dashboard
+        const { orderId } = req.body; 
         
         const params = new URLSearchParams();
         params.append("key", process.env.SMM_API_KEY);
@@ -152,9 +174,8 @@ router.post("/refill", async (req, res) => {
         const response = await axios.post(process.env.SMM_API_URL, params);
 
         if (response.data && (response.data.refill || response.data.status === "success")) {
-            // Optional: Update status in DB to show refill is active
             await Order.findOneAndUpdate(
-                { providerOrderId: orderId },
+                { orderId: orderId },
                 { status: "pending_refill" }
             );
             
