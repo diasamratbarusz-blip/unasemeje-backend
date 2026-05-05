@@ -51,7 +51,7 @@ const OrderSchema = new mongoose.Schema(
     /* ================= PRICING ================= */
     cost: {
       type: Number, // What the customer paid you in KES
-      required: true,
+      required: [true, "Cost calculation is required"],
       default: 0
     },
 
@@ -63,12 +63,12 @@ const OrderSchema = new mongoose.Schema(
     },
 
     providerCharge: {
-      type: Number, // What the provider charged you (useful for SMM Africa USD tracking)
+      type: Number, // What the provider charged you (useful for tracking)
       default: 0
     },
 
     /* ================= PROVIDER SYNC ================= */
-    // Identifies which API credentials to use (PROVIDER1 or PROVIDER2)
+    // Identifies which API credentials to use
     provider: {
       type: String,
       default: "PROVIDER1",
@@ -77,7 +77,7 @@ const OrderSchema = new mongoose.Schema(
       uppercase: true
     },
 
-    // This stores the external ID returned by the provider (SMM Africa order ID)
+    // This stores the external ID returned by the provider API
     orderId: {
       type: String,
       default: null,
@@ -107,13 +107,13 @@ const OrderSchema = new mongoose.Schema(
     }
   },
   {
-    // Automatically adds 'createdAt' (Order Date) and 'updatedAt' fields
+    // Automatically adds 'createdAt' and 'updatedAt' fields
     timestamps: true 
   }
 );
 
 /* ================= INDEXING ================= */
-// Optimized for the 'Orders' page which sorts by newest first for specific users
+// Optimized for the 'Orders' page which sorts by newest first
 OrderSchema.index({ userId: 1, createdAt: -1 });
 
 // Ensure the link field is explicitly non-unique at the index level
@@ -121,15 +121,21 @@ OrderSchema.path('link').index({ unique: false });
 
 /* ================= MIDDLEWARE ================= */
 /**
- * Pre-save hook to ensure currency values are rounded to 2 or 4 decimal places
- * to avoid floating point math issues in the database.
+ * Pre-save hook to ensure currency values are rounded correctly.
+ * Added check for 'this.cost' and 'this.providerCharge' to prevent 
+ * internal errors if values are missing during initial save.
  */
 OrderSchema.pre("save", function (next) {
-  if (this.cost) {
+  if (this.cost !== undefined && this.cost !== null) {
     this.cost = Math.round(this.cost * 100) / 100; // Round to 2 decimals for KES
+  } else {
+    this.cost = 0;
   }
-  if (this.providerCharge) {
-    this.providerCharge = Math.round(this.providerCharge * 10000) / 10000; // Round to 4 decimals for USD provider rates
+  
+  if (this.providerCharge !== undefined && this.providerCharge !== null) {
+    this.providerCharge = Math.round(this.providerCharge * 10000) / 10000; // Round to 4 decimals
+  } else {
+    this.providerCharge = 0;
   }
   next();
 });
