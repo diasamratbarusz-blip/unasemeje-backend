@@ -23,7 +23,8 @@ const OrderSchema = new mongoose.Schema(
     serviceId: {
       type: String, 
       required: [true, "Service ID is required"],
-      index: true
+      index: true,
+      trim: true
     },
 
     serviceName: {
@@ -37,7 +38,8 @@ const OrderSchema = new mongoose.Schema(
       type: String,
       required: [true, "Target link (URL) is required"],
       trim: true,
-      unique: false // CRITICAL: Ensures users can order for the same link multiple times
+      // unique: false is explicit here to allow multiple orders for the same URL
+      unique: false 
     },
 
     quantity: {
@@ -56,7 +58,8 @@ const OrderSchema = new mongoose.Schema(
     currency: {
       type: String,
       default: "KES",
-      uppercase: true
+      uppercase: true,
+      trim: true
     },
 
     providerCharge: {
@@ -70,14 +73,16 @@ const OrderSchema = new mongoose.Schema(
       type: String,
       default: "PROVIDER1",
       enum: ["PROVIDER1", "PROVIDER2"],
-      index: true
+      index: true,
+      uppercase: true
     },
 
     // This stores the external ID returned by the provider (SMM Africa order ID)
     orderId: {
       type: String,
       default: null,
-      index: true
+      index: true,
+      trim: true
     },
 
     /* ================= STATUS ================= */
@@ -86,7 +91,8 @@ const OrderSchema = new mongoose.Schema(
       default: "pending",
       enum: ["pending", "processing", "inprogress", "completed", "partial", "canceled", "refunded"],
       lowercase: true,
-      index: true
+      index: true,
+      trim: true
     },
 
     /* ================= TRACKING ================= */
@@ -101,16 +107,31 @@ const OrderSchema = new mongoose.Schema(
     }
   },
   {
-    // Automatically adds 'createdAt' and 'updatedAt' fields
+    // Automatically adds 'createdAt' (Order Date) and 'updatedAt' fields
     timestamps: true 
   }
 );
 
 /* ================= INDEXING ================= */
-// Optimized for the 'Orders' page which sorts by newest first
+// Optimized for the 'Orders' page which sorts by newest first for specific users
 OrderSchema.index({ userId: 1, createdAt: -1 });
 
-// We remove any unique index requirements for link at the database level
+// Ensure the link field is explicitly non-unique at the index level
 OrderSchema.path('link').index({ unique: false });
+
+/* ================= MIDDLEWARE ================= */
+/**
+ * Pre-save hook to ensure currency values are rounded to 2 or 4 decimal places
+ * to avoid floating point math issues in the database.
+ */
+OrderSchema.pre("save", function (next) {
+  if (this.cost) {
+    this.cost = Math.round(this.cost * 100) / 100; // Round to 2 decimals for KES
+  }
+  if (this.providerCharge) {
+    this.providerCharge = Math.round(this.providerCharge * 10000) / 10000; // Round to 4 decimals for USD provider rates
+  }
+  next();
+});
 
 module.exports = mongoose.model("Order", OrderSchema);
