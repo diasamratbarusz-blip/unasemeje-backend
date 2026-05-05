@@ -79,18 +79,22 @@ function generateReferralCode() {
 }
 
 async function giveReferralBonus(userId, orderCost) {
-  const user = await User.findById(userId);
-  if (!user || !user.referredBy) return;
+  try {
+    const user = await User.findById(userId);
+    if (!user || !user.referredBy) return;
 
-  const referrer = await User.findOne({ referralCode: user.referredBy });
-  if (!referrer) return;
+    const referrer = await User.findOne({ referralCode: user.referredBy });
+    if (!referrer) return;
 
-  const bonus = orderCost * 0.10; // 10% Referral Bonus
-  referrer.balance += bonus;
-  referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
+    const bonus = orderCost * 0.10; // 10% Referral Bonus
+    referrer.balance += bonus;
+    referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
 
-  await referrer.save();
-  log(`Referral bonus of ${bonus} given to ${referrer.email}`);
+    await referrer.save();
+    log(`Referral bonus of ${bonus} given to ${referrer.email}`);
+  } catch (err) {
+    log("Referral Bonus Error: " + err.message);
+  }
 }
 
 function cleanServiceName(name = "") {
@@ -138,7 +142,6 @@ app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
     
-    // Check if user already exists via email, phone, or the new username
     const exists = await User.findOne({ 
       $or: [{ email }, { phone }, { username: username?.toLowerCase() }] 
     });
@@ -165,7 +168,6 @@ app.post("/api/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; 
     
-    // Look for user by email OR username
     const user = await User.findOne({ 
       $or: [
           { email: identifier?.toLowerCase() }, 
@@ -202,7 +204,6 @@ app.get("/api/services", async (req, res) => {
     let services = await Service.find();
     
     if (!services.length) {
-      // P1: Delixgains Logic
       const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response1 = await axios.get(url1);
       const list1 = Array.isArray(response1.data) ? response1.data : Object.values(response1.data).flat();
@@ -218,7 +219,6 @@ app.get("/api/services", async (req, res) => {
         provider: "PROVIDER1"
       }));
 
-      // P2: SMM Africa Logic
       let p2Mapped = [];
       if (process.env.API_KEY_PROVIDER2) {
         const response2 = await axios.post(process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", {
@@ -332,8 +332,12 @@ app.post("/api/order", auth, async (req, res) => {
 });
 
 app.get("/api/orders", auth, async (req, res) => {
-  const orders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-  res.json(orders);
+  try {
+    const orders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch orders" });
+  }
 });
 
 app.get("/api/sync-orders", auth, async (req, res) => {
@@ -443,7 +447,6 @@ app.post("/api/deposit", auth, async (req, res) => {
     };
 
     await Deposit.create(depositData);
-
     res.json({ success: true, message: "Deposit submitted! Admin will approve it shortly." });
   } catch (error) {
     console.error("DEPOSIT ERROR:", error.message);
@@ -485,8 +488,12 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
 });
 
 app.get("/api/admin/users", auth, isAdmin, async (req, res) => {
-  const users = await User.find({}, "-password");
-  res.json(users);
+  try {
+    const users = await User.find({}, "-password");
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
 });
 
 /**
