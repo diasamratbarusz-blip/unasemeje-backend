@@ -36,24 +36,28 @@ const depositSchema = new mongoose.Schema(
     },
 
     /* ================= M-PESA TRANSACTION ================= */
-    // This is the primary field for the transaction code
+    // Primary field for the transaction code (e.g., QRL71ABCDE)
     transactionCode: {
       type: String,
       unique: true,
       sparse: true,
-      index: true
+      index: true,
+      trim: true,
+      uppercase: true
     },
 
     /**
      * FIX FOR E11000 ERROR:
-     * Added 'code' field to match the existing database index 
-     * causing the "dup key: { code: null }" error.
+     * This 'code' field is maintained to match existing database indexes.
+     * The pre-save hook below ensures it mirrors transactionCode.
      */
     code: {
       type: String,
       unique: true,
       sparse: true,
-      index: true
+      index: true,
+      trim: true,
+      uppercase: true
     },
 
     /* ================= FULL RAW MESSAGE ================= */
@@ -107,9 +111,21 @@ const depositSchema = new mongoose.Schema(
 );
 
 /* ================= INDEXING ================= */
+// Composite index for fast user-specific history lookups
 depositSchema.index({ userId: 1, createdAt: -1 });
-// Ensure both potential fields are indexed for fast searching
-depositSchema.index({ transactionCode: 1 });
-depositSchema.index({ code: 1 });
+
+/* ================= MIDDLEWARE ================= */
+/**
+ * Pre-save hook to ensure 'code' and 'transactionCode' are always identical.
+ * This prevents null conflicts on unique indexes.
+ */
+depositSchema.pre("save", function (next) {
+  if (this.transactionCode && !this.code) {
+    this.code = this.transactionCode;
+  } else if (this.code && !this.transactionCode) {
+    this.transactionCode = this.code;
+  }
+  next();
+});
 
 module.exports = mongoose.model("Deposit", depositSchema);
