@@ -36,7 +36,7 @@ const UserSchema = new mongoose.Schema(
 
     email: {
       type: String,
-      required: true,
+      required: [true, "Email is required"],
       unique: true,
       lowercase: true,
       trim: true,
@@ -45,7 +45,7 @@ const UserSchema = new mongoose.Schema(
 
     password: {
       type: String,
-      required: true
+      required: [true, "Password is required"]
     },
 
     /** 
@@ -54,7 +54,7 @@ const UserSchema = new mongoose.Schema(
      */
     phone: {
       type: String,
-      required: true, 
+      required: [true, "Phone number is required"], 
       unique: true,
       trim: true,
       index: true
@@ -145,5 +145,17 @@ UserSchema.index({ email: 1 });
 UserSchema.index({ phone: 1 });
 UserSchema.index({ role: 1 });
 UserSchema.index({ referralCode: 1 });
+
+/**
+ * Pre-save middleware to handle any final data cleanup
+ * before it hits the database.
+ */
+UserSchema.pre("save", function (next) {
+  // Ensure the phone number is clean (no spaces)
+  if (this.phone) {
+    this.phone = this.phone.replace(/\s+/g, '');
+  }
+  next();
+});
 
 module.exports = mongoose.model("User", UserSchema);
