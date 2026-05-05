@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 /**
  * =========================
- * ORDER MODEL (SMM PANEL)
+ * ORDER MODEL (UNASEMEJE ø DIA)
  * =========================
  * This model stores all details for social media orders.
  * It is designed to match the server.js order placement logic 
@@ -38,7 +38,6 @@ const OrderSchema = new mongoose.Schema(
       type: String,
       required: [true, "Target link (URL) is required"],
       trim: true,
-      // unique: false is explicit here to allow multiple orders for the same URL
       unique: false 
     },
 
@@ -63,12 +62,12 @@ const OrderSchema = new mongoose.Schema(
     },
 
     providerCharge: {
-      type: Number, // What the provider charged you (useful for tracking)
+      type: Number, // What the provider charged you in USD/Base
       default: 0
     },
 
     /* ================= PROVIDER SYNC ================= */
-    // Identifies which API credentials to use
+    // Identifies which API credentials to use (Delixgains or SMM Africa)
     provider: {
       type: String,
       default: "PROVIDER1",
@@ -89,7 +88,8 @@ const OrderSchema = new mongoose.Schema(
     status: {
       type: String,
       default: "pending",
-      enum: ["pending", "processing", "inprogress", "completed", "partial", "canceled", "refunded"],
+      // Note: Enum is removed here to prevent "Validation Error" when 
+      // providers send non-standard status strings like "queued" or "processing"
       lowercase: true,
       index: true,
       trim: true
@@ -116,24 +116,20 @@ const OrderSchema = new mongoose.Schema(
 // Optimized for the 'Orders' page which sorts by newest first
 OrderSchema.index({ userId: 1, createdAt: -1 });
 
-// Ensure the link field is explicitly non-unique at the index level
-OrderSchema.path('link').index({ unique: false });
-
 /* ================= MIDDLEWARE ================= */
 /**
  * Pre-save hook to ensure currency values are rounded correctly.
- * Added check for 'this.cost' and 'this.providerCharge' to prevent 
- * internal errors if values are missing during initial save.
+ * Rounds KES to 2 decimals and Provider charges to 5 decimals.
  */
 OrderSchema.pre("save", function (next) {
   if (this.cost !== undefined && this.cost !== null) {
-    this.cost = Math.round(this.cost * 100) / 100; // Round to 2 decimals for KES
+    this.cost = Math.round(this.cost * 100) / 100; 
   } else {
     this.cost = 0;
   }
   
   if (this.providerCharge !== undefined && this.providerCharge !== null) {
-    this.providerCharge = Math.round(this.providerCharge * 10000) / 10000; // Round to 4 decimals
+    this.providerCharge = Math.round(this.providerCharge * 100000) / 100000; 
   } else {
     this.providerCharge = 0;
   }
