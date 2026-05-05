@@ -263,18 +263,17 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
+// FIXED ORDER ROUTE TO PREVENT INTERNAL SERVER ERROR
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
     
-    // 1. Fetch Service and User
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: "User profile not found" });
 
-    // 2. Pricing Logic
     const userRate = applyFinalPrice(service.rate, service.name);
     const totalCost = (userRate / 1000) * Number(quantity);
 
@@ -282,63 +281,69 @@ app.post("/api/order", auth, async (req, res) => {
       return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost.toFixed(2)}` });
     }
 
-    // 3. Provider Communication
     let providerRes;
     const providerType = service.provider || "PROVIDER1";
 
-    if (providerType === "PROVIDER2") {
-        providerRes = await axios.post(process.env.API_URL_PROVIDER2, {
-            key: process.env.API_KEY_PROVIDER2,
-            action: "add",
-            service: serviceId,
-            link: link,
-            quantity: quantity,
-            source_flow: "api_v3"
-        });
-    } else {
-        const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
-        providerRes = await axios.get(providerUrl);
+    try {
+        if (providerType === "PROVIDER2") {
+            providerRes = await axios.post(process.env.API_URL_PROVIDER2, {
+                key: process.env.API_KEY_PROVIDER2,
+                action: "add",
+                service: serviceId,
+                link: link,
+                quantity: quantity
+            });
+        } else {
+            const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
+            providerRes = await axios.get(providerUrl);
+        }
+    } catch (apiErr) {
+        log("API Connection Error: " + apiErr.message);
+        return res.status(500).json({ error: "Provider is currently unreachable. Please try again later." });
     }
     
-    // 4. Handle Provider Response
     const pData = providerRes.data;
     if (!pData || (!pData.order && !pData.id)) {
-        log("Provider Rejection: " + JSON.stringify(pData));
-        return res.status(400).json({ error: pData.error || "Provider connection error" });
+        return res.status(400).json({ error: pData.error || "Provider rejected the order." });
     }
 
-    const providerOrderId = pData.order || pData.id;
+    const providerOrderId = String(pData.order || pData.id);
 
-    // 5. Update User Balance & Save Order
-    user.balance -= totalCost;
-    user.totalSpent = (user.totalSpent || 0) + totalCost;
-    user.totalOrders = (user.totalOrders || 0) + 1;
-    await user.save();
+    // Update User Balance & Save Order in a safe block
+    try {
+        user.balance -= totalCost;
+        user.totalSpent = (user.totalSpent || 0) + totalCost;
+        user.totalOrders = (user.totalOrders || 0) + 1;
+        await user.save();
 
-    const order = await Order.create({
-      userId: user._id,
-      serviceId: serviceId,
-      serviceName: service.name, 
-      orderId: String(providerOrderId), // Ensuring it is a string for the model
-      link: link,
-      quantity: quantity,
-      cost: totalCost,
-      status: "pending",
-      provider: providerType,
-      providerCharge: pData.charged || 0
-    });
+        const order = await Order.create({
+          userId: user._id,
+          serviceId: serviceId,
+          serviceName: service.name, 
+          orderId: providerOrderId, 
+          link: link,
+          quantity: quantity,
+          cost: totalCost,
+          status: "pending",
+          provider: providerType,
+          providerCharge: pData.charged || 0
+        });
 
-    await giveReferralBonus(user._id, totalCost);
+        await giveReferralBonus(user._id, totalCost);
 
-    res.json({ 
-      success: true, 
-      message: "Order placed successfully", 
-      orderId: order.orderId, 
-      newBalance: user.balance 
-    });
+        res.json({ 
+          success: true, 
+          message: "Order placed successfully", 
+          orderId: order.orderId, 
+          newBalance: user.balance 
+        });
+    } catch (dbErr) {
+        log("Order Database Save Error: " + dbErr.message);
+        return res.status(500).json({ error: "Failed to record order. Please contact support with order ID: " + providerOrderId });
+    }
 
   } catch (err) { 
-    log("Order Placement Error: " + err.message);
+    log("Critical Order Placement Error: " + err.message);
     res.status(500).json({ error: "Internal server error occurred during order confirmation." }); 
   }
 });
