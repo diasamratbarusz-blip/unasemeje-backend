@@ -18,7 +18,7 @@ const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
 // Log API status on boot
-console.log("--- UNASEMEJE SMM PROVIDER STATUS ---");
+console.log("--- UNASEMEJE ø DIA PROVIDER STATUS ---");
 console.log("P1 (Delixgains):", "https://delixgainske.com/api/v2", process.env.SMM_API_KEY ? "✅" : "❌");
 console.log("P2 (SMM Africa):", process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", process.env.API_KEY_PROVIDER2 ? "✅" : "❌");
 
@@ -39,7 +39,7 @@ const ADMIN_PHONE = "0715509440";
 
 // CONNECT DB
 connectDB();
-log("Unasemeje SMM Server starting...");
+log("UNASEMEJE ø DIA - Server starting...");
 
 /**
  * =========================================
@@ -136,7 +136,7 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 
-app.get("/", (req, res) => res.send("🚀 unasemeje ø dia SMM Backend Operational"));
+app.get("/", (req, res) => res.send("🚀 UNASEMEJE ø DIA SMM Backend Operational"));
 
 app.post("/api/register", async (req, res) => {
   try {
@@ -146,7 +146,7 @@ app.post("/api/register", async (req, res) => {
       $or: [{ email }, { phone }, { username: username?.toLowerCase() }] 
     });
     
-    if (exists) return res.status(400).json({ error: "Account already exists (Email, Phone, or Username taken)" });
+    if (exists) return res.status(400).json({ error: "Account already exists" });
 
     const newUser = await User.create({
       username: username?.toLowerCase(),
@@ -258,12 +258,11 @@ app.get("/api/services", async (req, res) => {
     });
     res.json({ success: true, data: grouped });
   } catch (err) { 
-    log("Service Fetch Error: " + err.message);
+    log.error("Service Fetch Error: " + err.message);
     res.status(500).json({ error: "Failed to load services" }); 
   }
 });
 
-// FIXED ORDER ROUTE TO PREVENT INTERNAL SERVER ERROR
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -272,13 +271,13 @@ app.post("/api/order", auth, async (req, res) => {
     if (!service) return res.status(404).json({ error: "Service not found" });
 
     const user = await User.findById(req.user.id);
-    if (!user) return res.status(404).json({ error: "User profile not found" });
+    if (!user) return res.status(404).json({ error: "User not found" });
 
     const userRate = applyFinalPrice(service.rate, service.name);
     const totalCost = (userRate / 1000) * Number(quantity);
 
     if (user.balance < totalCost) {
-      return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost.toFixed(2)}` });
+      return res.status(400).json({ error: `Insufficient balance.` });
     }
 
     let providerRes;
@@ -294,66 +293,52 @@ app.post("/api/order", auth, async (req, res) => {
                 quantity: quantity
             });
         } else {
+            // Delixgains URL matches your provided documentation
             const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
             providerRes = await axios.get(providerUrl);
         }
     } catch (apiErr) {
-        log("API Connection Error: " + apiErr.message);
-        return res.status(500).json({ error: "Provider is currently unreachable. Please try again later." });
+        log.error("API Connection Error: " + apiErr.message);
+        return res.status(500).json({ error: "Provider is currently unreachable." });
     }
     
     const pData = providerRes.data;
+    // Delixgains returns { "order": 1 }
     if (!pData || (!pData.order && !pData.id)) {
+        log.error("Provider Rejection: " + JSON.stringify(pData));
         return res.status(400).json({ error: pData.error || "Provider rejected the order." });
     }
 
     const providerOrderId = String(pData.order || pData.id);
 
-    // Update User Balance & Save Order in a safe block
-    try {
-        user.balance -= totalCost;
-        user.totalSpent = (user.totalSpent || 0) + totalCost;
-        user.totalOrders = (user.totalOrders || 0) + 1;
-        await user.save();
+    user.balance -= totalCost;
+    user.totalSpent = (user.totalSpent || 0) + totalCost;
+    user.totalOrders = (user.totalOrders || 0) + 1;
+    await user.save();
 
-        const order = await Order.create({
-          userId: user._id,
-          serviceId: serviceId,
-          serviceName: service.name, 
-          orderId: providerOrderId, 
-          link: link,
-          quantity: quantity,
-          cost: totalCost,
-          status: "pending",
-          provider: providerType,
-          providerCharge: pData.charged || 0
-        });
+    const order = await Order.create({
+      userId: user._id,
+      serviceId: serviceId,
+      serviceName: service.name, 
+      orderId: providerOrderId, 
+      link: link,
+      quantity: quantity,
+      cost: totalCost,
+      status: "pending",
+      provider: providerType
+    });
 
-        await giveReferralBonus(user._id, totalCost);
+    await giveReferralBonus(user._id, totalCost);
 
-        res.json({ 
-          success: true, 
-          message: "Order placed successfully", 
-          orderId: order.orderId, 
-          newBalance: user.balance 
-        });
-    } catch (dbErr) {
-        log("Order Database Save Error: " + dbErr.message);
-        return res.status(500).json({ error: "Failed to record order. Please contact support with order ID: " + providerOrderId });
-    }
+    res.json({ 
+      success: true, 
+      orderId: order.orderId, 
+      newBalance: user.balance 
+    });
 
   } catch (err) { 
-    log("Critical Order Placement Error: " + err.message);
-    res.status(500).json({ error: "Internal server error occurred during order confirmation." }); 
-  }
-});
-
-app.get("/api/orders", auth, async (req, res) => {
-  try {
-    const orders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    res.json(orders);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch orders" });
+    log.error("Critical Order Error: " + err.message);
+    res.status(500).json({ error: "Server error during order." }); 
   }
 });
 
@@ -361,37 +346,35 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const orders = await Order.find({ 
         userId: req.user.id, 
-        status: { $in: ["pending", "processing", "inprogress", "Pending", "Processing", "In progress", "Partial", "queued"] } 
+        status: { $in: ["pending", "processing", "inprogress", "Pending", "Partial", "partial"] } 
     });
 
     for (let order of orders) {
-      if (order.orderId) { 
-        let response;
-        if (order.provider === "PROVIDER2") {
-            response = await axios.post(process.env.API_URL_PROVIDER2, {
-                key: process.env.API_KEY_PROVIDER2,
-                action: "status",
-                order: order.orderId
-            });
-        } else {
-            const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
-            response = await axios.get(url);
-        }
-        
-        if (response.data && response.data.status) {
-          order.status = response.data.status.toLowerCase(); 
-          if(response.data.remains) order.remains = response.data.remains;
-          if(response.data.start_count) order.startCount = response.data.start_count;
-          
-          await order.save();
-        }
+      let response;
+      if (order.provider === "PROVIDER2") {
+          response = await axios.post(process.env.API_URL_PROVIDER2, {
+              key: process.env.API_KEY_PROVIDER2,
+              action: "status",
+              order: order.orderId
+          });
+      } else {
+          const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
+          response = await axios.get(url);
+      }
+      
+      const data = response.data;
+      if (data && data.status) {
+        order.status = data.status; 
+        order.remains = data.remains || order.remains;
+        order.startCount = data.start_count || order.startCount;
+        await order.save();
       }
     }
     
     const updatedOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
     res.json(updatedOrders);
   } catch (err) {
-    res.status(500).json({ error: "Failed to sync orders" });
+    res.status(500).json({ error: "Sync failed" });
   }
 });
 
@@ -402,26 +385,16 @@ app.post('/api/refill', auth, async (req, res) => {
         if (!order) return res.status(404).json({ error: "Order not found" });
 
         let response;
-        if (order.provider === "PROVIDER2") {
-            response = await axios.post(process.env.API_URL_PROVIDER2, {
-                key: process.env.API_KEY_PROVIDER2,
-                action: "refill",
-                order: order.orderId
-            });
-        } else {
-            const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId}`;
-            response = await axios.get(url);
-        }
+        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId}`;
+        response = await axios.get(url);
 
-        const data = response.data;
-        if (data.refill || data.status === "success" || data.refill_id || data.success) {
-            res.json({ success: true, message: "Refill request sent successfully!" });
+        if (response.data.refill || response.data.status === "success") {
+            res.json({ success: true, message: "Refill request sent!" });
         } else {
-            res.json({ success: false, error: data.error || "Refill not available for this order yet." });
+            res.json({ success: false, error: "Refill not available yet." });
         }
     } catch (error) {
-        log("Refill Error: " + error.message);
-        res.status(500).json({ error: "Server error during refill request" });
+        res.status(500).json({ error: "Refill error" });
     }
 });
 
@@ -433,92 +406,51 @@ app.post('/api/refill', auth, async (req, res) => {
 
 app.post("/api/deposit", auth, async (req, res) => {
   try {
-    const { message, phone, amount } = req.body;
-    
+    const { message, amount } = req.body;
     const codeMatch = message?.match(/[A-Z0-9]{8,12}/);
-    let extractedCode = codeMatch ? codeMatch[0] : (req.body.transactionCode || req.body.code);
+    let extractedCode = codeMatch ? codeMatch[0] : req.body.transactionCode;
     
-    if (!extractedCode) {
-        return res.status(400).json({ error: "Please paste the full MPESA message to submit." });
-    }
+    if (!extractedCode) return res.status(400).json({ error: "Invalid M-Pesa code." });
 
-    const finalCode = extractedCode.toUpperCase();
+    const exists = await Deposit.findOne({ transactionCode: extractedCode.toUpperCase() });
+    if (exists) return res.status(400).json({ error: "Code already used." });
 
-    const exists = await Deposit.findOne({ 
-        $or: [{ transactionCode: finalCode }, { code: finalCode }] 
-    });
-
-    if (exists) {
-        return res.status(400).json({ error: "This code has already been used. Please use a new message." });
-    }
-
-    const depositData = {
+    await Deposit.create({
       userId: req.user.id,
-      userEmail: req.user.email || "N/A",
-      phone: phone || "N/A",
-      amount: Number(amount) || 0,
-      transactionCode: finalCode,
-      code: finalCode,            
-      message: message || "Manual Submission",
+      amount: Number(amount),
+      transactionCode: extractedCode.toUpperCase(),
+      message: message,
       status: "pending"
-    };
-
-    await Deposit.create(depositData);
-    res.json({ success: true, message: "Deposit submitted! Admin will approve it shortly." });
+    });
+    res.json({ success: true, message: "Deposit submitted for approval." });
   } catch (error) {
-    console.error("DEPOSIT ERROR:", error.message);
-    res.status(500).json({ error: "Server error: " + error.message });
+    res.status(500).json({ error: "Deposit failed." });
   }
 });
 
 app.get("/api/admin/deposits", auth, isAdmin, async (req, res) => {
-  try {
-    const deposits = await Deposit.find({ status: "pending" }).sort({ createdAt: -1 });
-    res.json(deposits);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch deposits." });
-  }
+  const deposits = await Deposit.find({ status: "pending" }).sort({ createdAt: -1 });
+  res.json(deposits);
 });
 
 app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
   try {
     const { depositId } = req.body;
     const dep = await Deposit.findById(depositId);
-    
-    if (!dep) return res.status(404).json({ error: "Deposit not found." });
-    if (dep.status === "approved") return res.status(400).json({ error: "Already approved." });
+    if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid deposit." });
 
     const user = await User.findById(dep.userId);
-    if (!user) return res.status(404).json({ error: "User not found." });
-
     user.balance += Number(dep.amount);
     await user.save();
     
     dep.status = "approved";
     await dep.save();
 
-    log(`Approved KES ${dep.amount} for ${user.email}`);
-    res.json({ success: true, message: "Deposit approved!" });
+    res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: "Error during approval." });
+    res.status(500).json({ error: "Approval error." });
   }
 });
 
-app.get("/api/admin/users", auth, isAdmin, async (req, res) => {
-  try {
-    const users = await User.find({}, "-password");
-    res.json(users);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch users" });
-  }
-});
-
-/**
- * =========================================
- * START SERVER
- * =========================================
- */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 unasemeje ø dia SMM running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA running on port ${PORT}`));
