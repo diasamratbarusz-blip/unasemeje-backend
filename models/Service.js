@@ -1,27 +1,16 @@
-const express = require("express");
 const mongoose = require("mongoose");
-const cors = require("cors");
-require("dotenv").config();
-
-const app = express();
-
-// MIDDLEWARE
-app.use(express.json());
-app.use(cors());
-
-// MONGODB CONNECTION
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ Connected to UNASEMEJE Database"))
-  .catch((err) => console.error("❌ Database Connection Error:", err));
 
 /**
  * =========================
  * SERVICE MODEL (SMM PANEL)
  * =========================
+ * Stores services from provider + markup pricing
+ * Supports filtering, grouping, and fast dashboard loading
  */
+
 const ServiceSchema = new mongoose.Schema(
   {
+    /* ================= PROVIDER SERVICE ID ================= */
     serviceId: {
       type: String,
       required: true,
@@ -29,6 +18,8 @@ const ServiceSchema = new mongoose.Schema(
       index: true,
       trim: true
     },
+
+    /* ================= BASIC INFO ================= */
     name: {
       type: String,
       required: true,
@@ -36,66 +27,93 @@ const ServiceSchema = new mongoose.Schema(
       default: "Unnamed Service",
       index: true
     },
+
     category: {
       type: String,
       default: "Other",
       index: true
     },
+
+    /* ================= PRICING ================= */
+
+    // 🔴 ORIGINAL PROVIDER PRICE (VERY IMPORTANT)
     originalRate: {
       type: Number,
       default: 0
     },
+
+    // 🟡 BASE RATE (PROVIDER RATE USED INTERNALLY)
     rate: {
       type: Number,
       required: true,
       default: 0
     },
+
+    // 🟢 FINAL SELLING PRICE (AFTER YOUR MARKUP)
     sellingRate: {
       type: Number,
       default: 0
     },
+
     currency: {
       type: String,
       enum: ["USD", "KES", "EUR", "OTHER"],
       default: "KES"
     },
+
+    /* ================= LIMITS ================= */
     min: {
       type: Number,
       default: 1
     },
+
     max: {
       type: Number,
       default: 1000000
     },
+
+    /* ================= PLATFORM DETECTION ================= */
     platform: {
       type: String,
       default: "Other",
       index: true
     },
+
+    /* ================= STATUS CONTROL ================= */
     status: {
       type: String,
       enum: ["active", "disabled"],
       default: "active",
       index: true
     },
+
+    /* ================= PROVIDER META ================= */
     provider: {
       type: String,
       default: "default"
     }
+
   },
   {
     timestamps: true
   }
 );
 
-// INDEXING
+/* ================= INDEXING FOR SPEED ================= */
 ServiceSchema.index({ platform: 1, status: 1 });
 ServiceSchema.index({ category: 1 });
 
-// MARKUP CALCULATION UTILITY
+/* ================= AUTO PRICE CALCULATION ================= */
+/**
+ * This ensures:
+ * - sellingRate is ALWAYS updated
+ * - your markup is always applied automatically
+ */
+
 function applyMarkup(service) {
   const name = (service.name || "").toLowerCase();
-  let markup = 40; // default KES profit per 1k
+
+  let markup = 40; // default
 
   if (name.includes("likes")) markup = 30;
   else if (name.includes("followers")) markup = 20;
@@ -105,24 +123,34 @@ function applyMarkup(service) {
   return Number(service.rate || 0) + markup;
 }
 
-// MIDDLEWARE HOOKS
+/* ================= BEFORE SAVE HOOK ================= */
 ServiceSchema.pre("save", function (next) {
   try {
-    if (!this.originalRate) this.originalRate = this.rate;
+    // keep original rate safe
+    if (!this.originalRate) {
+      this.originalRate = this.rate;
+    }
+
+    // apply markup
     this.sellingRate = applyMarkup(this);
+
     next();
   } catch (err) {
     next(err);
   }
 });
 
+/* ================= BEFORE UPDATE HOOK ================= */
 ServiceSchema.pre("findOneAndUpdate", function (next) {
   try {
     const update = this.getUpdate();
+
     if (update.rate || update.name) {
       const name = update.name || "";
       const rate = update.rate || 0;
+
       let markup = 40;
+
       const n = name.toLowerCase();
 
       if (n.includes("likes")) markup = 30;
@@ -133,53 +161,11 @@ ServiceSchema.pre("findOneAndUpdate", function (next) {
       update.sellingRate = rate + markup;
       update.originalRate = rate;
     }
+
     next();
   } catch (err) {
     next(err);
   }
 });
 
-const Service = mongoose.model("Service", ServiceSchema);
-
-/**
- * =========================
- * API ROUTES
- * =========================
- */
-
-// 1. Fetch All Services (Grouped for Dashboard)
-app.get("/api/services", async (req, res) => {
-  try {
-    const services = await Service.find({ status: "active" });
-    
-    // Grouping logic for the frontend select menus
-    const grouped = services.reduce((acc, s) => {
-      if (!acc[s.platform]) acc[s.platform] = {};
-      if (!acc[s.platform][s.category]) acc[s.platform][s.category] = [];
-      
-      acc[s.platform][s.category].push({
-        serviceId: s.serviceId,
-        name: s.name,
-        rate: s.sellingRate,
-        min: s.min,
-        max: s.max
-      });
-      return acc;
-    }, {});
-
-    res.json({ success: true, data: grouped });
-  } catch (err) {
-    res.status(500).json({ success: false, error: "Failed to load services" });
-  }
-});
-
-// 2. Health Check
-app.get("/", (req, res) => {
-  res.send("UNASEMEJE SMM API is running...");
-});
-
-// SERVER START
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server active on port ${PORT}`);
-});
+module.exports = mongoose.model("Service", ServiceSchema);
