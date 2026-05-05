@@ -267,17 +267,22 @@ app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
     
+    // 1. Fetch Service and User
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: "User profile not found" });
+
+    // 2. Pricing Logic
     const userRate = applyFinalPrice(service.rate, service.name);
     const totalCost = (userRate / 1000) * Number(quantity);
 
-    const user = await User.findById(req.user.id);
     if (user.balance < totalCost) {
       return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost.toFixed(2)}` });
     }
 
+    // 3. Provider Communication
     let providerRes;
     const providerType = service.provider || "PROVIDER1";
 
@@ -295,25 +300,32 @@ app.post("/api/order", auth, async (req, res) => {
         providerRes = await axios.get(providerUrl);
     }
     
-    if (!providerRes.data || !providerRes.data.order) {
-        log("Provider Rejection: " + JSON.stringify(providerRes.data));
-        return res.status(400).json({ error: providerRes.data.error || "Provider connection error" });
+    // 4. Handle Provider Response
+    const pData = providerRes.data;
+    if (!pData || (!pData.order && !pData.id)) {
+        log("Provider Rejection: " + JSON.stringify(pData));
+        return res.status(400).json({ error: pData.error || "Provider connection error" });
     }
 
+    const providerOrderId = pData.order || pData.id;
+
+    // 5. Update User Balance & Save Order
     user.balance -= totalCost;
+    user.totalSpent = (user.totalSpent || 0) + totalCost;
+    user.totalOrders = (user.totalOrders || 0) + 1;
     await user.save();
 
     const order = await Order.create({
       userId: user._id,
       serviceId: serviceId,
       serviceName: service.name, 
-      orderId: String(providerRes.data.order), 
+      orderId: String(providerOrderId), // Ensuring it is a string for the model
       link: link,
       quantity: quantity,
       cost: totalCost,
       status: "pending",
       provider: providerType,
-      providerCharge: providerRes.data.charged || 0
+      providerCharge: pData.charged || 0
     });
 
     await giveReferralBonus(user._id, totalCost);
@@ -327,7 +339,7 @@ app.post("/api/order", auth, async (req, res) => {
 
   } catch (err) { 
     log("Order Placement Error: " + err.message);
-    res.status(500).json({ error: "Internal server error" }); 
+    res.status(500).json({ error: "Internal server error occurred during order confirmation." }); 
   }
 });
 
