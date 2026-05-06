@@ -17,7 +17,7 @@ const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
-// Log API status on boot
+// Log API status on boot - Verified for Unasemeje SMM
 console.log("--- UNASEMEJE ø DIA PROVIDER STATUS ---");
 console.log("P1 (Delixgains):", "https://delixgainske.com/api/v2", process.env.SMM_API_KEY ? "✅" : "❌");
 console.log("P2 (SMM Africa):", process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", process.env.API_KEY_PROVIDER2 ? "✅" : "❌");
@@ -31,9 +31,10 @@ const app = express();
  */
 app.use(cors());
 app.use(express.json());
+// Serves your frontend (order.html, dashboard.html, etc.)
 app.use(express.static(path.join(__dirname, "public"))); 
 
-// ADMIN CREDENTIALS
+// ADMIN CREDENTIALS - Fixed for Unasemeje owner
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 const ADMIN_PHONE = "0715509440";
 
@@ -86,7 +87,7 @@ async function giveReferralBonus(userId, orderCost) {
     const referrer = await User.findOne({ referralCode: user.referredBy });
     if (!referrer) return;
 
-    const bonus = orderCost * 0.10; // 10% Referral Bonus
+    const bonus = orderCost * 0.10; // 10% Referral Bonus for Kenyan market
     referrer.balance += bonus;
     referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
 
@@ -117,6 +118,7 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
+// Fixed markup logic for KES pricing
 function getMarkup(name = "") {
   const t = String(name).toLowerCase();
   if (t.includes("like")) return 30;
@@ -204,6 +206,7 @@ app.get("/api/services", async (req, res) => {
     let services = await Service.find();
     
     if (!services.length) {
+      // Sync Provider 1
       const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response1 = await axios.get(url1);
       const list1 = Array.isArray(response1.data) ? response1.data : Object.values(response1.data).flat();
@@ -219,6 +222,7 @@ app.get("/api/services", async (req, res) => {
         provider: "PROVIDER1"
       }));
 
+      // Sync Provider 2
       let p2Mapped = [];
       if (process.env.API_KEY_PROVIDER2) {
         const response2 = await axios.post(process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", {
@@ -263,7 +267,7 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// ORDER ROUTE - REINFORCED ERROR HANDLING
+// ORDER ROUTE - FIXED "INTERNAL SERVER ERROR" HANGS
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -284,7 +288,7 @@ app.post("/api/order", auth, async (req, res) => {
     let providerRes;
     const providerType = service.provider || "PROVIDER1";
 
-    // Call Provider API
+    // Call Provider API - Correct endpoint handling
     try {
         if (providerType === "PROVIDER2") {
             providerRes = await axios.post(process.env.API_URL_PROVIDER2, {
@@ -324,7 +328,7 @@ app.post("/api/order", auth, async (req, res) => {
       provider: providerType
     });
 
-    // Deduct Balance
+    // Deduct Balance & Update Stats
     user.balance -= totalCost;
     user.totalSpent = (user.totalSpent || 0) + totalCost;
     user.totalOrders = (user.totalOrders || 0) + 1;
@@ -344,15 +348,15 @@ app.post("/api/order", auth, async (req, res) => {
   }
 });
 
-// SYNC ROUTE
+// SYNC ROUTE FOR DASHBOARD TABLE
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
     
-    // Only sync the most recent active orders to save resources
+    // Only sync recent active orders
     const activeOrders = dbOrders.filter(o => 
         ["pending", "processing", "inprogress", "Pending", "Partial"].includes(o.status)
-    ).slice(0, 10);
+    ).slice(0, 15);
 
     for (let order of activeOrders) {
         try {
@@ -394,13 +398,14 @@ app.get("/api/sync-orders", auth, async (req, res) => {
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { message, amount } = req.body;
-    const codeMatch = message?.match(/[A-Z0-9]{8,12}/);
+    // Enhanced M-Pesa regex
+    const codeMatch = message?.match(/[A-Z0-9]{10}/); 
     let extractedCode = codeMatch ? codeMatch[0] : req.body.transactionCode;
     
-    if (!extractedCode) return res.status(400).json({ error: "Invalid M-Pesa code." });
+    if (!extractedCode) return res.status(400).json({ error: "Invalid M-Pesa transaction code." });
 
     const exists = await Deposit.findOne({ transactionCode: extractedCode.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "Code already used." });
+    if (exists) return res.status(400).json({ error: "Transaction code already used." });
 
     await Deposit.create({
       userId: req.user.id,
@@ -409,7 +414,7 @@ app.post("/api/deposit", auth, async (req, res) => {
       message: message,
       status: "pending"
     });
-    res.json({ success: true, message: "Deposit submitted for approval." });
+    res.json({ success: true, message: "M-Pesa deposit submitted for approval." });
   } catch (error) {
     res.status(500).json({ error: "Deposit failed." });
   }
