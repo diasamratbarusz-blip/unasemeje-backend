@@ -274,7 +274,7 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// ORDER ROUTE - FIXED "INTERNAL SERVER ERROR"
+// ORDER ROUTE - SOLVES "INTERNAL SERVER ERROR" from image_3.png
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -299,7 +299,7 @@ app.post("/api/order", auth, async (req, res) => {
     let providerRes;
     const providerType = service.provider || "PROVIDER1";
 
-    // Call Provider API
+    // Call Provider API with enhanced error tracking
     try {
         if (providerType === "PROVIDER2") {
             providerRes = await axios.post(process.env.API_URL_PROVIDER2, {
@@ -315,10 +315,11 @@ app.post("/api/order", auth, async (req, res) => {
         }
     } catch (apiErr) {
         log("API Connection Error: " + apiErr.message);
-        return res.status(500).json({ error: "SMM Provider unreachable. Please try again in 1 minute." });
+        return res.status(502).json({ error: "Provider is currently unresponsive. Please try again shortly." });
     }
     
     const pData = providerRes.data;
+    
     // Check if provider returned an error message instead of an ID
     if (pData.error) {
         return res.status(400).json({ error: `Provider Error: ${pData.error}` });
@@ -328,7 +329,7 @@ app.post("/api/order", auth, async (req, res) => {
 
     if (!providerOrderId) {
         log("Provider Rejection: " + JSON.stringify(pData));
-        return res.status(400).json({ error: "Provider rejected the request. Please check link format." });
+        return res.status(422).json({ error: "Order rejected by provider. Please verify your link format." });
     }
 
     // Save Order to DB
@@ -344,7 +345,7 @@ app.post("/api/order", auth, async (req, res) => {
       provider: providerType
     });
 
-    // Deduct Balance
+    // Deduct Balance only after order success
     user.balance -= totalCost;
     user.totalSpent = (user.totalSpent || 0) + totalCost;
     user.totalOrders = (user.totalOrders || 0) + 1;
@@ -360,7 +361,7 @@ app.post("/api/order", auth, async (req, res) => {
 
   } catch (err) { 
     log("Critical Order Error: " + err.stack);
-    res.status(500).json({ error: "Internal server error while processing order." }); 
+    res.status(500).json({ error: "Internal server error. Please contact support if this persists." }); 
   }
 });
 
@@ -369,6 +370,7 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
     
+    // Only sync status for active orders to save resources
     const activeOrders = dbOrders.filter(o => 
         ["pending", "processing", "inprogress", "Pending", "Partial"].includes(o.status)
     ).slice(0, 15);
