@@ -88,8 +88,7 @@ const OrderSchema = new mongoose.Schema(
     status: {
       type: String,
       default: "pending",
-      // Note: Enum is removed here to prevent "Validation Error" when 
-      // providers send non-standard status strings like "queued" or "processing"
+      // Note: Enum is removed to allow flexible provider status strings
       lowercase: true,
       index: true,
       trim: true
@@ -122,17 +121,24 @@ OrderSchema.index({ userId: 1, createdAt: -1 });
  * Rounds KES to 2 decimals and Provider charges to 5 decimals.
  */
 OrderSchema.pre("save", function (next) {
-  if (this.cost !== undefined && this.cost !== null) {
+  // Ensure cost is a number and rounded to 2 decimals (KES)
+  if (typeof this.cost === 'number') {
     this.cost = Math.round(this.cost * 100) / 100; 
   } else {
     this.cost = 0;
   }
   
-  if (this.providerCharge !== undefined && this.providerCharge !== null) {
+  // Ensure providerCharge is a number and rounded to 5 decimals
+  if (typeof this.providerCharge === 'number') {
     this.providerCharge = Math.round(this.providerCharge * 100000) / 100000; 
   } else {
     this.providerCharge = 0;
   }
+
+  // Ensure tracking numbers don't drop below zero
+  if (this.remains < 0) this.remains = 0;
+  if (this.startCount < 0) this.startCount = 0;
+
   next();
 });
 
