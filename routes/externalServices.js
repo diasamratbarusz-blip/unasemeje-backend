@@ -105,7 +105,7 @@ router.get("/provider2", async (req, res) => {
 
     const rawServices = response.data;
     const cleanedServices = rawServices.map((s) => ({
-      serviceId: String(s.service),
+      serviceId: String(s.service || s.id),
       name: s.name,
       category: s.category,
       rate: parseFloat(s.rate),
