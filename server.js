@@ -258,12 +258,12 @@ app.get("/api/services", async (req, res) => {
     });
     res.json({ success: true, data: grouped });
   } catch (err) { 
-    log.error("Service Fetch Error: " + err.message);
+    log("Service Fetch Error: " + err.message);
     res.status(500).json({ error: "Failed to load services" }); 
   }
 });
 
-// ORDER ROUTE - CRITICAL FIX FOR DB PERSISTENCE
+// ORDER ROUTE - REINFORCED ERROR HANDLING
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -278,7 +278,7 @@ app.post("/api/order", auth, async (req, res) => {
     const totalCost = (userRate / 1000) * Number(quantity);
 
     if (user.balance < totalCost) {
-      return res.status(400).json({ error: `Insufficient balance.` });
+      return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost.toFixed(2)}` });
     }
 
     let providerRes;
@@ -299,19 +299,19 @@ app.post("/api/order", auth, async (req, res) => {
             providerRes = await axios.get(providerUrl);
         }
     } catch (apiErr) {
-        log.error("API Connection Error: " + apiErr.message);
-        return res.status(500).json({ error: "Provider is unreachable." });
+        log("API Connection Error: " + apiErr.message);
+        return res.status(500).json({ error: "SMM Provider unreachable. Try again later." });
     }
     
     const pData = providerRes.data;
     const providerOrderId = pData.order || pData.id;
 
     if (!providerOrderId) {
-        log.error("Provider Rejection: " + JSON.stringify(pData));
-        return res.status(400).json({ error: pData.error || "Provider rejected the order." });
+        log("Provider Rejection: " + JSON.stringify(pData));
+        return res.status(400).json({ error: pData.error || "Provider rejected the order. Check link/quantity." });
     }
 
-    // Save Order First, then deduct balance to ensure history existence
+    // Save Order to DB
     const order = await Order.create({
       userId: user._id,
       serviceId: serviceId,
@@ -324,6 +324,7 @@ app.post("/api/order", auth, async (req, res) => {
       provider: providerType
     });
 
+    // Deduct Balance
     user.balance -= totalCost;
     user.totalSpent = (user.totalSpent || 0) + totalCost;
     user.totalOrders = (user.totalOrders || 0) + 1;
@@ -338,7 +339,7 @@ app.post("/api/order", auth, async (req, res) => {
     });
 
   } catch (err) { 
-    log.error("Critical Order Error: " + err.stack);
+    log("Critical Order Error: " + err.stack);
     res.status(500).json({ error: "Internal server error while processing order." }); 
   }
 });
@@ -348,9 +349,10 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
     
+    // Only sync the most recent active orders to save resources
     const activeOrders = dbOrders.filter(o => 
         ["pending", "processing", "inprogress", "Pending", "Partial"].includes(o.status)
-    ).slice(0, 5);
+    ).slice(0, 10);
 
     for (let order of activeOrders) {
         try {
@@ -365,6 +367,7 @@ app.get("/api/sync-orders", auth, async (req, res) => {
                 const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
                 response = await axios.get(url);
             }
+            
             if (response.data && response.data.status) {
                 await Order.findByIdAndUpdate(order._id, {
                     status: response.data.status.toLowerCase(),
@@ -372,7 +375,7 @@ app.get("/api/sync-orders", auth, async (req, res) => {
                     startCount: response.data.start_count || order.startCount
                 });
             }
-        } catch (e) { /* background sync failure */ }
+        } catch (e) { /* silent fail for background sync */ }
     }
 
     const updatedOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
@@ -380,25 +383,6 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: "Sync failed" });
   }
-});
-
-app.post('/api/refill', auth, async (req, res) => {
-    try {
-        const { orderId } = req.body;
-        const order = await Order.findById(orderId);
-        if (!order) return res.status(404).json({ error: "Order not found" });
-
-        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId}`;
-        const response = await axios.get(url);
-
-        if (response.data.refill || response.data.status === "success") {
-            res.json({ success: true, message: "Refill request sent!" });
-        } else {
-            res.json({ success: false, error: "Refill not available." });
-        }
-    } catch (error) {
-        res.status(500).json({ error: "Refill error" });
-    }
 });
 
 /**
