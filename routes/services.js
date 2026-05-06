@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const axios = require("axios");
-const Service = require("../../models/Service");
+const Service = require("../models/Service"); // Path adjusted to match standard routes folder
 
 /* =========================
    ENV CHECK SAFETY
@@ -19,7 +19,7 @@ if (!process.env.API_URL_PROVIDER2 || !process.env.API_KEY_PROVIDER2) {
 const fetchProviderServices = async () => {
   let allServices = [];
 
-  // --- PROVIDER 1 FETCH (Original) ---
+  // --- PROVIDER 1 FETCH (Original / Delixgains) ---
   try {
     const url1 = `${process.env.SMM_API_URL}?action=services&key=${process.env.SMM_API_KEY}`;
     const response1 = await axios.get(url1, { timeout: 20000 });
@@ -81,17 +81,18 @@ const fetchProviderServices = async () => {
 ========================= */
 const syncServicesToDB = async (services) => {
   try {
-    if (!services.length) return;
+    if (!services || !services.length) return;
 
     const ops = services.map((s) => ({
       updateOne: {
-        filter: { serviceId: s.serviceId, provider: s.provider }, // Filter by ID AND Provider
+        filter: { serviceId: s.serviceId, provider: s.provider }, 
         update: { $set: s },
         upsert: true
       }
     }));
 
     await Service.bulkWrite(ops);
+    console.log(`✅ Database Synced: ${services.length} services processed.`);
   } catch (err) {
     console.error("❌ DB sync error:", err.message);
   }
@@ -130,12 +131,13 @@ function detectType(name = "") {
 }
 
 /* =========================
-   FLAT SERVICES
-========================= */
+   FLAT SERVICES (FOR LISTS)
+======================== */
 router.get("/all", async (req, res) => {
   try {
     let services = await Service.find({ status: "active" });
 
+    // If DB is empty, trigger a sync first
     if (!services.length) {
       const providerServices = await fetchProviderServices();
       await syncServicesToDB(providerServices);
@@ -154,7 +156,7 @@ router.get("/all", async (req, res) => {
 });
 
 /* =========================
-   GROUPED SERVICES
+   GROUPED SERVICES (FOR DASHBOARD)
 ========================= */
 router.get("/", async (req, res) => {
   try {
@@ -176,6 +178,7 @@ router.get("/", async (req, res) => {
       if (!grouped[platform][type]) grouped[platform][type] = [];
 
       grouped[platform][type].push({
+        id: s._id, // MongoDB Object ID
         serviceId: s.serviceId,
         name: s.name,
         rate: Number(s.rate || 0).toFixed(2),
@@ -198,7 +201,7 @@ router.get("/", async (req, res) => {
 });
 
 /* =========================
-   SINGLE SERVICE
+   SINGLE SERVICE DETAIL
 ========================= */
 router.get("/:serviceId", async (req, res) => {
   try {
