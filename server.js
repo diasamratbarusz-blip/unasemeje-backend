@@ -191,8 +191,13 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.get("/api/me", auth, async (req, res) => {
-  const user = await User.findById(req.user.id).select("-password");
-  res.json(user);
+  try {
+    const user = await User.findById(req.user.id).select("-password");
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch profile" });
+  }
 });
 
 /**
@@ -225,21 +230,23 @@ app.get("/api/services", async (req, res) => {
       // Sync Provider 2
       let p2Mapped = [];
       if (process.env.API_KEY_PROVIDER2) {
-        const response2 = await axios.post(process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", {
-           key: process.env.API_KEY_PROVIDER2,
-           action: "services"
-        });
-        const list2 = Array.isArray(response2.data) ? response2.data : [];
-        p2Mapped = list2.map(s => ({
-          serviceId: String(s.service),
-          name: cleanServiceName(s.name),
-          rate: Number(s.rate || 0),
-          min: Number(s.min || 1),
-          max: Number(s.max || 10000),
-          category: s.category || "General",
-          platform: detectPlatform(s),
-          provider: "PROVIDER2"
-        }));
+        try {
+            const response2 = await axios.post(process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", {
+               key: process.env.API_KEY_PROVIDER2,
+               action: "services"
+            });
+            const list2 = Array.isArray(response2.data) ? response2.data : [];
+            p2Mapped = list2.map(s => ({
+              serviceId: String(s.service),
+              name: cleanServiceName(s.name),
+              rate: Number(s.rate || 0),
+              min: Number(s.min || 1),
+              max: Number(s.max || 10000),
+              category: s.category || "General",
+              platform: detectPlatform(s),
+              provider: "PROVIDER2"
+            }));
+        } catch (e) { log("P2 Sync Failed, skipping..."); }
       }
 
       await Service.deleteMany({});
@@ -267,11 +274,15 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// ORDER ROUTE - FIXED "INTERNAL SERVER ERROR" HANGS
+// ORDER ROUTE - FIXED "INTERNAL SERVER ERROR"
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
     
+    if (!serviceId || !link || !quantity) {
+        return res.status(400).json({ error: "Missing required fields (serviceId, link, or quantity)." });
+    }
+
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
@@ -288,7 +299,7 @@ app.post("/api/order", auth, async (req, res) => {
     let providerRes;
     const providerType = service.provider || "PROVIDER1";
 
-    // Call Provider API - Correct endpoint handling
+    // Call Provider API
     try {
         if (providerType === "PROVIDER2") {
             providerRes = await axios.post(process.env.API_URL_PROVIDER2, {
@@ -299,20 +310,25 @@ app.post("/api/order", auth, async (req, res) => {
                 quantity: quantity
             });
         } else {
-            const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`;
+            const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
             providerRes = await axios.get(providerUrl);
         }
     } catch (apiErr) {
         log("API Connection Error: " + apiErr.message);
-        return res.status(500).json({ error: "SMM Provider unreachable. Try again later." });
+        return res.status(500).json({ error: "SMM Provider unreachable. Please try again in 1 minute." });
     }
     
     const pData = providerRes.data;
+    // Check if provider returned an error message instead of an ID
+    if (pData.error) {
+        return res.status(400).json({ error: `Provider Error: ${pData.error}` });
+    }
+
     const providerOrderId = pData.order || pData.id;
 
     if (!providerOrderId) {
         log("Provider Rejection: " + JSON.stringify(pData));
-        return res.status(400).json({ error: pData.error || "Provider rejected the order. Check link/quantity." });
+        return res.status(400).json({ error: "Provider rejected the request. Please check link format." });
     }
 
     // Save Order to DB
@@ -328,7 +344,7 @@ app.post("/api/order", auth, async (req, res) => {
       provider: providerType
     });
 
-    // Deduct Balance & Update Stats
+    // Deduct Balance
     user.balance -= totalCost;
     user.totalSpent = (user.totalSpent || 0) + totalCost;
     user.totalOrders = (user.totalOrders || 0) + 1;
@@ -353,7 +369,6 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
     
-    // Only sync recent active orders
     const activeOrders = dbOrders.filter(o => 
         ["pending", "processing", "inprogress", "Pending", "Partial"].includes(o.status)
     ).slice(0, 15);
@@ -379,7 +394,7 @@ app.get("/api/sync-orders", auth, async (req, res) => {
                     startCount: response.data.start_count || order.startCount
                 });
             }
-        } catch (e) { /* silent fail for background sync */ }
+        } catch (e) { /* background sync fail */ }
     }
 
     const updatedOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
@@ -398,7 +413,6 @@ app.get("/api/sync-orders", auth, async (req, res) => {
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { message, amount } = req.body;
-    // Enhanced M-Pesa regex
     const codeMatch = message?.match(/[A-Z0-9]{10}/); 
     let extractedCode = codeMatch ? codeMatch[0] : req.body.transactionCode;
     
@@ -421,8 +435,10 @@ app.post("/api/deposit", auth, async (req, res) => {
 });
 
 app.get("/api/admin/deposits", auth, isAdmin, async (req, res) => {
-  const deposits = await Deposit.find({ status: "pending" }).sort({ createdAt: -1 });
-  res.json(deposits);
+  try {
+    const deposits = await Deposit.find({ status: "pending" }).sort({ createdAt: -1 });
+    res.json(deposits);
+  } catch (e) { res.status(500).json({ error: "Failed to fetch deposits" }); }
 });
 
 app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
@@ -432,6 +448,8 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
     if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid deposit." });
 
     const user = await User.findById(dep.userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
     user.balance += Number(dep.amount);
     await user.save();
     
@@ -442,6 +460,13 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: "Approval error." });
   }
+});
+
+app.get("/api/admin/users", auth, isAdmin, async (req, res) => {
+  try {
+    const users = await User.find().select("-password");
+    res.json(users);
+  } catch (e) { res.status(500).json({ error: "Failed to fetch users" }); }
 });
 
 const PORT = process.env.PORT || 3000;
