@@ -1,12 +1,11 @@
 const mongoose = require("mongoose");
 
 /**
- * =========================
+ * =========================================
  * ORDER MODEL (UNASEMEJE ø DIA)
- * =========================
+ * =========================================
  * This model stores all details for social media orders.
- * It is designed to match the server.js order placement logic 
- * and the frontend dashboard table columns.
+ * Integrated with Delixgains API response structure.
  */
 
 const OrderSchema = new mongoose.Schema(
@@ -47,95 +46,96 @@ const OrderSchema = new mongoose.Schema(
       min: [1, "Quantity must be at least 1"]
     },
 
-    /* ================= PRICING ================= */
+    /* ================= PRICING (CUSTOMER) ================= */
     cost: {
-      type: Number, // What the customer paid you in KES
+      type: Number, // Amount charged to the Kenyan user in KES
       required: [true, "Cost calculation is required"],
       default: 0
     },
 
-    currency: {
+    userCurrency: {
       type: String,
       default: "KES",
       uppercase: true,
       trim: true
     },
 
+    /* ================= PROVIDER DATA (PROFIT TRACKING) ================= */
+    // "charge" from Delixgains API (usually what you paid in USD)
     providerCharge: {
-      type: Number, // What the provider charged you in USD/Base
+      type: Number, 
       default: 0
     },
 
-    /* ================= PROVIDER SYNC ================= */
-    // Identifies which API credentials to use (Delixgains or SMM Africa)
-    provider: {
+    // "currency" from Delixgains API (usually USD)
+    providerCurrency: {
       type: String,
-      default: "PROVIDER1",
-      enum: ["PROVIDER1", "PROVIDER2"],
-      index: true,
+      default: "USD",
       uppercase: true
     },
 
-    // This stores the external ID returned by the provider API
+    // Identifies provider (Delixgains = PROVIDER1)
+    provider: {
+      type: String,
+      default: "PROVIDER1",
+      uppercase: true,
+      index: true
+    },
+
+    // The "order" ID returned by Delixgains
     orderId: {
       type: String,
-      default: null,
+      required: [true, "Provider Order ID is required"],
       index: true,
       trim: true
     },
 
-    /* ================= STATUS ================= */
+    /* ================= STATUS & TRACKING ================= */
     status: {
       type: String,
       default: "pending",
-      // Note: Enum is removed to allow flexible provider status strings
       lowercase: true,
       index: true,
       trim: true
     },
 
-    /* ================= TRACKING ================= */
+    // "start_count" from Provider
     startCount: {
       type: Number,
       default: 0
     },
 
+    // "remains" from Provider
     remains: {
       type: Number,
       default: 0
     }
   },
   {
-    // Automatically adds 'createdAt' and 'updatedAt' fields
     timestamps: true 
   }
 );
 
 /* ================= INDEXING ================= */
-// Optimized for the 'Orders' page which sorts by newest first
+// Optimized for Dashboard: Shows newest orders first for a specific user
 OrderSchema.index({ userId: 1, createdAt: -1 });
 
 /* ================= MIDDLEWARE ================= */
 /**
- * Pre-save hook to ensure currency values are rounded correctly.
- * Rounds KES to 2 decimals and Provider charges to 5 decimals.
+ * Pre-save logic to ensure data integrity and rounding.
  */
 OrderSchema.pre("save", function (next) {
-  // Ensure cost is a number and rounded to 2 decimals (KES)
+  // Round customer KES cost to 2 decimals
   if (typeof this.cost === 'number' && !isNaN(this.cost)) {
     this.cost = Math.round(this.cost * 100) / 100; 
-  } else {
-    this.cost = 0;
-  }
-  
-  // Ensure providerCharge is a number and rounded to 5 decimals
-  if (typeof this.providerCharge === 'number' && !isNaN(this.providerCharge)) {
-    this.providerCharge = Math.round(this.providerCharge * 100000) / 100000; 
-  } else {
-    this.providerCharge = 0;
   }
 
-  // Ensure tracking numbers don't drop below zero
+  // Round provider USD charge to 5 decimals (e.g., 0.27819)
+  if (typeof this.providerCharge === 'number' && !isNaN(this.providerCharge)) {
+    this.providerCharge = Math.round(this.providerCharge * 100000) / 100000; 
+  }
+
+  // Prevent negative tracking values
   if (this.remains < 0 || isNaN(this.remains)) this.remains = 0;
   if (this.startCount < 0 || isNaN(this.startCount)) this.startCount = 0;
 
