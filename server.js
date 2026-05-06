@@ -263,7 +263,7 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// FIXED ORDER ROUTE
+// FIXED ORDER ROUTE - PREVENTS "SERVER ERROR DURING ORDER"
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -304,14 +304,15 @@ app.post("/api/order", auth, async (req, res) => {
     
     const pData = providerRes.data;
     
-    // FIX: Enhanced ID detection to prevent error display on success
+    // FIX: Catch both 'order' or 'id' fields from provider response
     const providerOrderId = pData.order || pData.id;
 
     if (!providerOrderId) {
-        log.error("Provider Rejection: " + JSON.stringify(pData));
-        return res.status(400).json({ error: pData.error || "Provider rejected the order." });
+        log.error("Provider Rejection Details: " + JSON.stringify(pData));
+        return res.status(400).json({ error: pData.error || "Provider rejected the order. Check link/quantity." });
     }
 
+    // UPDATE USER & SAVE ORDER IMMEDIATELY
     user.balance -= totalCost;
     user.totalSpent = (user.totalSpent || 0) + totalCost;
     user.totalOrders = (user.totalOrders || 0) + 1;
@@ -338,23 +339,22 @@ app.post("/api/order", auth, async (req, res) => {
     });
 
   } catch (err) { 
-    log.error("Critical Order Error: " + err.message);
-    res.status(500).json({ error: "Server error during order." }); 
+    log.error("Critical Order Error: " + err.stack);
+    res.status(500).json({ error: "Internal server error while processing order." }); 
   }
 });
 
-// FIXED SYNC ROUTE (No more empty history)
+// FIXED SYNC ROUTE (Ensures History is always visible)
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
-    // 1. First find orders and send them so the dashboard isn't empty
+    // 1. Fetch from DB first so user sees history instantly
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
     
-    // 2. Identify which orders need status updates
+    // 2. Refresh active orders in background
     const activeOrders = dbOrders.filter(o => 
-        ["pending", "processing", "inprogress", "Pending", "Partial", "partial"].includes(o.status)
-    ).slice(0, 5); // Limit background sync to last 5 active to prevent timeouts
+        ["pending", "processing", "inprogress", "Pending"].includes(o.status)
+    ).slice(0, 5);
 
-    // 3. Update active ones in the background (Async)
     activeOrders.forEach(async (order) => {
         try {
             let response;
@@ -370,39 +370,18 @@ app.get("/api/sync-orders", auth, async (req, res) => {
             }
             if (response.data && response.data.status) {
                 await Order.findByIdAndUpdate(order._id, {
-                    status: response.data.status,
+                    status: response.data.status.toLowerCase(),
                     remains: response.data.remains || order.remains,
                     startCount: response.data.start_count || order.startCount
                 });
             }
-        } catch (e) { /* background fail is silent */ }
+        } catch (e) { /* silent fail */ }
     });
 
-    // Send original DB data immediately
     res.json(dbOrders);
   } catch (err) {
-    res.status(500).json({ error: "Sync failed" });
+    res.status(500).json({ error: "Failed to fetch history." });
   }
-});
-
-app.post('/api/refill', auth, async (req, res) => {
-    try {
-        const { orderId } = req.body;
-        const order = await Order.findById(orderId);
-        if (!order) return res.status(404).json({ error: "Order not found" });
-
-        let response;
-        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId}`;
-        response = await axios.get(url);
-
-        if (response.data.refill || response.data.status === "success") {
-            res.json({ success: true, message: "Refill request sent!" });
-        } else {
-            res.json({ success: false, error: "Refill not available yet." });
-        }
-    } catch (error) {
-        res.status(500).json({ error: "Refill error" });
-    }
 });
 
 /**
@@ -431,7 +410,7 @@ app.post("/api/deposit", auth, async (req, res) => {
     });
     res.json({ success: true, message: "Deposit submitted for approval." });
   } catch (error) {
-    res.status(500).json({ error: "Deposit failed." });
+    res.status(500).json({ error: "Deposit submission failed." });
   }
 });
 
@@ -444,7 +423,7 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
   try {
     const { depositId } = req.body;
     const dep = await Deposit.findById(depositId);
-    if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid deposit." });
+    if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid or already approved." });
 
     const user = await User.findById(dep.userId);
     user.balance += Number(dep.amount);
@@ -455,7 +434,7 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: "Approval error." });
+    res.status(500).json({ error: "Approval failed." });
   }
 });
 
