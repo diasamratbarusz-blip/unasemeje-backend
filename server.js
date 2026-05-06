@@ -17,7 +17,7 @@ const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
-// Log API status on boot - Verified for Unasemeje SMM
+// Log API status on boot - Verified for UNASEMEJE ø DIA
 console.log("--- UNASEMEJE ø DIA PROVIDER STATUS ---");
 console.log("P1 (Delixgains):", "https://delixgainske.com/api/v2", process.env.SMM_API_KEY ? "✅" : "❌");
 console.log("P2 (SMM Africa):", process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", process.env.API_KEY_PROVIDER2 ? "✅" : "❌");
@@ -31,14 +31,11 @@ const app = express();
  */
 app.use(cors());
 app.use(express.json());
-// Serves your frontend (order.html, dashboard.html, etc.)
 app.use(express.static(path.join(__dirname, "public"))); 
 
-// ADMIN CREDENTIALS - Fixed for Unasemeje owner
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 const ADMIN_PHONE = "0715509440";
 
-// CONNECT DB
 connectDB();
 log("UNASEMEJE ø DIA - Server starting...");
 
@@ -87,7 +84,7 @@ async function giveReferralBonus(userId, orderCost) {
     const referrer = await User.findOne({ referralCode: user.referredBy });
     if (!referrer) return;
 
-    const bonus = orderCost * 0.10; // 10% Referral Bonus for Kenyan market
+    const bonus = orderCost * 0.10; // 10% Referral Bonus
     referrer.balance += bonus;
     referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
 
@@ -118,7 +115,6 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// Fixed markup logic for KES pricing
 function getMarkup(name = "") {
   const t = String(name).toLowerCase();
   if (t.includes("like")) return 30;
@@ -134,7 +130,7 @@ function applyFinalPrice(originalRate, name) {
 
 /**
  * =========================================
- * USER & AUTH ROUTES
+ * ROUTES
  * =========================================
  */
 
@@ -143,25 +139,18 @@ app.get("/", (req, res) => res.send("🚀 UNASEMEJE ø DIA SMM Backend Operation
 app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
-    
-    const exists = await User.findOne({ 
-      $or: [{ email }, { phone }, { username: username?.toLowerCase() }] 
-    });
-    
+    const exists = await User.findOne({ $or: [{ email }, { phone }, { username: username?.toLowerCase() }] });
     if (exists) return res.status(400).json({ error: "Account already exists" });
 
     const newUser = await User.create({
       username: username?.toLowerCase(),
-      email, 
-      password, 
-      phone,
+      email, password, phone,
       referralCode: generateReferralCode(),
       referredBy: referralCode || null,
       balance: 0
     });
     res.json({ message: "Registration successful", referralCode: newUser.referralCode });
   } catch (err) { 
-    log("Registration Error: " + err.message);
     res.status(500).json({ error: "Registration failed" }); 
   }
 });
@@ -169,21 +158,10 @@ app.post("/api/register", async (req, res) => {
 app.post("/api/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; 
-    
-    const user = await User.findOne({ 
-      $or: [
-          { email: identifier?.toLowerCase() }, 
-          { username: identifier?.toLowerCase() }
-      ],
-      password 
-    });
-
+    const user = await User.findOne({ $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }], password });
     if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
-    const token = jwt.sign(
-      { id: user._id, email: user.email, phone: user.phone, username: user.username },
-      process.env.JWT_SECRET, { expiresIn: "7d" }
-    );
+    const token = jwt.sign({ id: user._id, email: user.email, phone: user.phone, username: user.username }, process.env.JWT_SECRET, { expiresIn: "7d" });
     res.json({ token, balance: user.balance });
   } catch (err) {
     res.status(500).json({ error: "Login failed" });
@@ -193,31 +171,22 @@ app.post("/api/login", async (req, res) => {
 app.get("/api/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-password");
-    if (!user) return res.status(404).json({ error: "User not found" });
     res.json(user);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch profile" });
   }
 });
 
-/**
- * =========================================
- * SERVICES & ORDERS
- * =========================================
- */
-
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
-    
     if (!services.length) {
-      // Sync Provider 1
       const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response1 = await axios.get(url1);
-      const list1 = Array.isArray(response1.data) ? response1.data : Object.values(response1.data).flat();
+      const list1 = Array.isArray(response1.data) ? response1.data : [];
 
-      const p1Mapped = list1.map((s, i) => ({
-        serviceId: String(s.service || s.id || i),
+      const p1Mapped = list1.map(s => ({
+        serviceId: String(s.service),
         name: cleanServiceName(s.name),
         rate: Number(s.rate || 0),
         min: Number(s.min || 1),
@@ -227,30 +196,8 @@ app.get("/api/services", async (req, res) => {
         provider: "PROVIDER1"
       }));
 
-      // Sync Provider 2
-      let p2Mapped = [];
-      if (process.env.API_KEY_PROVIDER2) {
-        try {
-            const response2 = await axios.post(process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3", {
-               key: process.env.API_KEY_PROVIDER2,
-               action: "services"
-            });
-            const list2 = Array.isArray(response2.data) ? response2.data : [];
-            p2Mapped = list2.map(s => ({
-              serviceId: String(s.service),
-              name: cleanServiceName(s.name),
-              rate: Number(s.rate || 0),
-              min: Number(s.min || 1),
-              max: Number(s.max || 10000),
-              category: s.category || "General",
-              platform: detectPlatform(s),
-              provider: "PROVIDER2"
-            }));
-        } catch (e) { log("P2 Sync Failed, skipping..."); }
-      }
-
       await Service.deleteMany({});
-      await Service.insertMany([...p1Mapped, ...p2Mapped]);
+      await Service.insertMany(p1Mapped);
       services = await Service.find();
     }
 
@@ -260,215 +207,96 @@ app.get("/api/services", async (req, res) => {
       const c = s.category;
       if (!grouped[p]) grouped[p] = {};
       if (!grouped[p][c]) grouped[p][c] = [];
-      
-      const serviceObj = s.toObject ? s.toObject() : s;
-      grouped[p][c].push({
-        ...serviceObj,
-        rate: applyFinalPrice(s.rate, s.name)
-      });
+      grouped[p][c].push({ ...s.toObject(), rate: applyFinalPrice(s.rate, s.name) });
     });
     res.json({ success: true, data: grouped });
   } catch (err) { 
-    log("Service Fetch Error: " + err.message);
     res.status(500).json({ error: "Failed to load services" }); 
   }
 });
 
-// ORDER ROUTE - SOLVES "INTERNAL SERVER ERROR" from image_3.png
+// ORDER PLACEMENT - UPDATED FOR DELIXGAINS JSON RESPONSE
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
-    
-    if (!serviceId || !link || !quantity) {
-        return res.status(400).json({ error: "Missing required fields (serviceId, link, or quantity)." });
-    }
+    if (!serviceId || !link || !quantity) return res.status(400).json({ error: "Missing fields" });
 
     const service = await Service.findOne({ serviceId });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
     const user = await User.findById(req.user.id);
-    if (!user) return res.status(404).json({ error: "User not found" });
+    const totalCost = (applyFinalPrice(service.rate, service.name) / 1000) * Number(quantity);
 
-    const userRate = applyFinalPrice(service.rate, service.name);
-    const totalCost = (userRate / 1000) * Number(quantity);
+    if (user.balance < totalCost) return res.status(400).json({ error: `Insufficient balance: KES ${totalCost.toFixed(2)}` });
 
-    if (user.balance < totalCost) {
-      return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost.toFixed(2)}` });
-    }
-
-    let providerRes;
-    const providerType = service.provider || "PROVIDER1";
-
-    // Call Provider API with enhanced error tracking
-    try {
-        if (providerType === "PROVIDER2") {
-            providerRes = await axios.post(process.env.API_URL_PROVIDER2, {
-                key: process.env.API_KEY_PROVIDER2,
-                action: "add",
-                service: serviceId,
-                link: link,
-                quantity: quantity
-            });
-        } else {
-            const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
-            providerRes = await axios.get(providerUrl);
-        }
-    } catch (apiErr) {
-        log("API Connection Error: " + apiErr.message);
-        return res.status(502).json({ error: "Provider is currently unresponsive. Please try again shortly." });
-    }
+    const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
+    const providerRes = await axios.get(providerUrl);
     
-    const pData = providerRes.data;
-    
-    // Check if provider returned an error message instead of an ID
-    if (pData.error) {
-        return res.status(400).json({ error: `Provider Error: ${pData.error}` });
+    // Delixgains Response: { "order": 1 }
+    if (providerRes.data && providerRes.data.order) {
+        const order = await Order.create({
+            userId: user._id,
+            serviceId: serviceId,
+            serviceName: service.name, 
+            orderId: String(providerRes.data.order), 
+            link, quantity, cost: totalCost, status: "pending"
+        });
+
+        user.balance -= totalCost;
+        await user.save();
+        await giveReferralBonus(user._id, totalCost);
+
+        res.json({ success: true, orderId: order.orderId, newBalance: user.balance });
+    } else {
+        res.status(400).json({ error: providerRes.data.error || "Provider error" });
     }
-
-    const providerOrderId = pData.order || pData.id;
-
-    if (!providerOrderId) {
-        log("Provider Rejection: " + JSON.stringify(pData));
-        return res.status(422).json({ error: "Order rejected by provider. Please verify your link format." });
-    }
-
-    // Save Order to DB
-    const order = await Order.create({
-      userId: user._id,
-      serviceId: serviceId,
-      serviceName: service.name, 
-      orderId: String(providerOrderId), 
-      link: link,
-      quantity: quantity,
-      cost: totalCost,
-      status: "pending",
-      provider: providerType
-    });
-
-    // Deduct Balance only after order success
-    user.balance -= totalCost;
-    user.totalSpent = (user.totalSpent || 0) + totalCost;
-    user.totalOrders = (user.totalOrders || 0) + 1;
-    await user.save();
-
-    await giveReferralBonus(user._id, totalCost);
-
-    res.json({ 
-      success: true, 
-      orderId: order.orderId, 
-      newBalance: user.balance 
-    });
-
   } catch (err) { 
-    log("Critical Order Error: " + err.stack);
-    res.status(500).json({ error: "Internal server error. Please contact support if this persists." }); 
+    res.status(500).json({ error: "Server error" }); 
   }
 });
 
-// SYNC ROUTE FOR DASHBOARD TABLE
+// SYNC HISTORY - UPDATED FOR DELIXGAINS MULTI-STATUS RESPONSE
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
-    const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    
-    // Only sync status for active orders to save resources
-    const activeOrders = dbOrders.filter(o => 
-        ["pending", "processing", "inprogress", "Pending", "Partial"].includes(o.status)
-    ).slice(0, 15);
+    const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 }).limit(15);
+    const activeIds = dbOrders.filter(o => !["completed", "canceled"].includes(o.status)).map(o => o.orderId);
 
-    for (let order of activeOrders) {
-        try {
-            let response;
-            if (order.provider === "PROVIDER2") {
-                response = await axios.post(process.env.API_URL_PROVIDER2, {
-                    key: process.env.API_KEY_PROVIDER2,
-                    action: "status",
-                    order: order.orderId
-                });
-            } else {
-                const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&order=${order.orderId}`;
-                response = await axios.get(url);
-            }
-            
-            if (response.data && response.data.status) {
+    if (activeIds.length > 0) {
+        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&orders=${activeIds.join(",")}`;
+        const response = await axios.get(url);
+        
+        for (let order of dbOrders) {
+            const update = response.data[order.orderId];
+            if (update && update.status) {
                 await Order.findByIdAndUpdate(order._id, {
-                    status: response.data.status.toLowerCase(),
-                    remains: response.data.remains || order.remains,
-                    startCount: response.data.start_count || order.startCount
+                    status: update.status.toLowerCase(),
+                    remains: update.remains,
+                    startCount: update.start_count
                 });
             }
-        } catch (e) { /* background sync fail */ }
+        }
     }
-
-    const updatedOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    res.json(updatedOrders);
-  } catch (err) {
-    res.status(500).json({ error: "Sync failed" });
-  }
+    const finalOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
+    res.json(finalOrders);
+  } catch (err) { res.status(500).json({ error: "Sync failed" }); }
 });
-
-/**
- * =========================================
- * PAYMENTS & ADMIN
- * =========================================
- */
 
 app.post("/api/deposit", auth, async (req, res) => {
   try {
-    const { message, amount } = req.body;
-    const codeMatch = message?.match(/[A-Z0-9]{10}/); 
-    let extractedCode = codeMatch ? codeMatch[0] : req.body.transactionCode;
-    
-    if (!extractedCode) return res.status(400).json({ error: "Invalid M-Pesa transaction code." });
+    const { amount, transactionCode } = req.body;
+    if (!transactionCode) return res.status(400).json({ error: "Invalid code" });
 
-    const exists = await Deposit.findOne({ transactionCode: extractedCode.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "Transaction code already used." });
+    const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
+    if (exists) return res.status(400).json({ error: "Code already used" });
 
     await Deposit.create({
       userId: req.user.id,
       amount: Number(amount),
-      transactionCode: extractedCode.toUpperCase(),
-      message: message,
+      transactionCode: transactionCode.toUpperCase(),
       status: "pending"
     });
-    res.json({ success: true, message: "M-Pesa deposit submitted for approval." });
-  } catch (error) {
-    res.status(500).json({ error: "Deposit failed." });
-  }
-});
-
-app.get("/api/admin/deposits", auth, isAdmin, async (req, res) => {
-  try {
-    const deposits = await Deposit.find({ status: "pending" }).sort({ createdAt: -1 });
-    res.json(deposits);
-  } catch (e) { res.status(500).json({ error: "Failed to fetch deposits" }); }
-});
-
-app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
-  try {
-    const { depositId } = req.body;
-    const dep = await Deposit.findById(depositId);
-    if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid deposit." });
-
-    const user = await User.findById(dep.userId);
-    if (!user) return res.status(404).json({ error: "User not found" });
-
-    user.balance += Number(dep.amount);
-    await user.save();
-    
-    dep.status = "approved";
-    await dep.save();
-
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: "Approval error." });
-  }
-});
-
-app.get("/api/admin/users", auth, isAdmin, async (req, res) => {
-  try {
-    const users = await User.find().select("-password");
-    res.json(users);
-  } catch (e) { res.status(500).json({ error: "Failed to fetch users" }); }
+    res.json({ success: true, message: "Deposit submitted" });
+  } catch (error) { res.status(500).json({ error: "Deposit failed" }); }
 });
 
 const PORT = process.env.PORT || 3000;
