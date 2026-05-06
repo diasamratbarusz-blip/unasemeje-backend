@@ -263,7 +263,7 @@ app.get("/api/services", async (req, res) => {
   }
 });
 
-// FIXED ORDER ROUTE - PREVENTS "SERVER ERROR DURING ORDER"
+// ORDER ROUTE - CRITICAL FIX FOR DB PERSISTENCE
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -284,6 +284,7 @@ app.post("/api/order", auth, async (req, res) => {
     let providerRes;
     const providerType = service.provider || "PROVIDER1";
 
+    // Call Provider API
     try {
         if (providerType === "PROVIDER2") {
             providerRes = await axios.post(process.env.API_URL_PROVIDER2, {
@@ -299,25 +300,18 @@ app.post("/api/order", auth, async (req, res) => {
         }
     } catch (apiErr) {
         log.error("API Connection Error: " + apiErr.message);
-        return res.status(500).json({ error: "Provider is currently unreachable." });
+        return res.status(500).json({ error: "Provider is unreachable." });
     }
     
     const pData = providerRes.data;
-    
-    // FIX: Catch both 'order' or 'id' fields from provider response
     const providerOrderId = pData.order || pData.id;
 
     if (!providerOrderId) {
-        log.error("Provider Rejection Details: " + JSON.stringify(pData));
-        return res.status(400).json({ error: pData.error || "Provider rejected the order. Check link/quantity." });
+        log.error("Provider Rejection: " + JSON.stringify(pData));
+        return res.status(400).json({ error: pData.error || "Provider rejected the order." });
     }
 
-    // UPDATE USER & SAVE ORDER IMMEDIATELY
-    user.balance -= totalCost;
-    user.totalSpent = (user.totalSpent || 0) + totalCost;
-    user.totalOrders = (user.totalOrders || 0) + 1;
-    await user.save();
-
+    // Save Order First, then deduct balance to ensure history existence
     const order = await Order.create({
       userId: user._id,
       serviceId: serviceId,
@@ -329,6 +323,11 @@ app.post("/api/order", auth, async (req, res) => {
       status: "pending",
       provider: providerType
     });
+
+    user.balance -= totalCost;
+    user.totalSpent = (user.totalSpent || 0) + totalCost;
+    user.totalOrders = (user.totalOrders || 0) + 1;
+    await user.save();
 
     await giveReferralBonus(user._id, totalCost);
 
@@ -344,18 +343,16 @@ app.post("/api/order", auth, async (req, res) => {
   }
 });
 
-// FIXED SYNC ROUTE (Ensures History is always visible)
+// SYNC ROUTE
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
-    // 1. Fetch from DB first so user sees history instantly
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
     
-    // 2. Refresh active orders in background
     const activeOrders = dbOrders.filter(o => 
-        ["pending", "processing", "inprogress", "Pending"].includes(o.status)
+        ["pending", "processing", "inprogress", "Pending", "Partial"].includes(o.status)
     ).slice(0, 5);
 
-    activeOrders.forEach(async (order) => {
+    for (let order of activeOrders) {
         try {
             let response;
             if (order.provider === "PROVIDER2") {
@@ -375,13 +372,33 @@ app.get("/api/sync-orders", auth, async (req, res) => {
                     startCount: response.data.start_count || order.startCount
                 });
             }
-        } catch (e) { /* silent fail */ }
-    });
+        } catch (e) { /* background sync failure */ }
+    }
 
-    res.json(dbOrders);
+    const updatedOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
+    res.json(updatedOrders);
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch history." });
+    res.status(500).json({ error: "Sync failed" });
   }
+});
+
+app.post('/api/refill', auth, async (req, res) => {
+    try {
+        const { orderId } = req.body;
+        const order = await Order.findById(orderId);
+        if (!order) return res.status(404).json({ error: "Order not found" });
+
+        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=refill&order=${order.orderId}`;
+        const response = await axios.get(url);
+
+        if (response.data.refill || response.data.status === "success") {
+            res.json({ success: true, message: "Refill request sent!" });
+        } else {
+            res.json({ success: false, error: "Refill not available." });
+        }
+    } catch (error) {
+        res.status(500).json({ error: "Refill error" });
+    }
 });
 
 /**
@@ -410,7 +427,7 @@ app.post("/api/deposit", auth, async (req, res) => {
     });
     res.json({ success: true, message: "Deposit submitted for approval." });
   } catch (error) {
-    res.status(500).json({ error: "Deposit submission failed." });
+    res.status(500).json({ error: "Deposit failed." });
   }
 });
 
@@ -423,7 +440,7 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
   try {
     const { depositId } = req.body;
     const dep = await Deposit.findById(depositId);
-    if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid or already approved." });
+    if (!dep || dep.status === "approved") return res.status(400).json({ error: "Invalid deposit." });
 
     const user = await User.findById(dep.userId);
     user.balance += Number(dep.amount);
@@ -434,7 +451,7 @@ app.post("/api/admin/approve-deposit", auth, isAdmin, async (req, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: "Approval failed." });
+    res.status(500).json({ error: "Approval error." });
   }
 });
 
