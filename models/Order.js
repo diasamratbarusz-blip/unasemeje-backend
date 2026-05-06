@@ -122,22 +122,22 @@ OrderSchema.index({ userId: 1, createdAt: -1 });
  */
 OrderSchema.pre("save", function (next) {
   // Ensure cost is a number and rounded to 2 decimals (KES)
-  if (typeof this.cost === 'number') {
+  if (typeof this.cost === 'number' && !isNaN(this.cost)) {
     this.cost = Math.round(this.cost * 100) / 100; 
   } else {
     this.cost = 0;
   }
   
   // Ensure providerCharge is a number and rounded to 5 decimals
-  if (typeof this.providerCharge === 'number') {
+  if (typeof this.providerCharge === 'number' && !isNaN(this.providerCharge)) {
     this.providerCharge = Math.round(this.providerCharge * 100000) / 100000; 
   } else {
     this.providerCharge = 0;
   }
 
   // Ensure tracking numbers don't drop below zero
-  if (this.remains < 0) this.remains = 0;
-  if (this.startCount < 0) this.startCount = 0;
+  if (this.remains < 0 || isNaN(this.remains)) this.remains = 0;
+  if (this.startCount < 0 || isNaN(this.startCount)) this.startCount = 0;
 
   next();
 });
