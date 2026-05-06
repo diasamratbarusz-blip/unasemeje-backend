@@ -4,15 +4,24 @@ const Service = require("../../models/Service"); // Ensure this model exists
 
 const router = express.Router();
 
-// ================= CACHE SYSTEM =================
-// Prevents hitting the provider API on every single page load
+/**
+ * =========================================
+ * CACHE SYSTEM
+ * Prevents hitting the provider API on every single page load
+ * =========================================
+ */
 let cache = {
   data: null,
   time: 0
 };
 const CACHE_TIME = 10 * 60 * 1000; // 10 Minutes
 
-// ================= PROVIDER SYNC =================
+/**
+ * =========================================
+ * PROVIDER SYNC
+ * Fetches fresh services from your SMM Provider
+ * =========================================
+ */
 async function fetchServicesFromProvider() {
   try {
     const params = new URLSearchParams();
@@ -22,28 +31,41 @@ async function fetchServicesFromProvider() {
     const res = await axios.post(process.env.SMM_API_URL, params, { timeout: 15000 });
 
     if (!Array.isArray(res.data)) {
-      throw new Error("Provider returned invalid data format");
+      // Handle cases where provider might return an object instead of array
+      const list = typeof res.data === 'object' ? Object.values(res.data).flat() : res.data;
+      if (!Array.isArray(list)) throw new Error("Provider returned invalid data format");
+      return list.map(mapService);
     }
 
-    return res.data.map(s => ({
-      serviceId: String(s.service || s.id),
-      name: s.name || "Service",
-      category: s.category || "General",
-      rate: parseFloat(s.rate || 0),
-      min: parseInt(s.min || 1),
-      max: parseInt(s.max || 10000)
-    }));
+    return res.data.map(mapService);
   } catch (err) {
     console.error("Sync Error:", err.message);
     return null;
   }
 }
 
-// ================= CATEGORY HELPERS =================
+// Helper to normalize service structure
+function mapService(s) {
+  return {
+    serviceId: String(s.service || s.id),
+    name: s.name || "Service",
+    category: s.category || "General",
+    rate: parseFloat(s.rate || 0),
+    min: parseInt(s.min || 1),
+    max: parseInt(s.max || 10000)
+  };
+}
+
+/**
+ * =========================================
+ * CATEGORY HELPERS
+ * Determines platform and service type for grouping
+ * =========================================
+ */
 function getPlatform(name = "", category = "") {
   const text = (name + " " + category).toLowerCase();
   if (text.includes("instagram") || text.includes("ig ")) return "Instagram";
-  if (text.includes("tiktok") || text.includes("tik tok")) return "TikTok";
+  if (text.includes("tiktok") || text.includes("tik tok") || text.includes("tt ")) return "TikTok";
   if (text.includes("youtube") || text.includes("yt ")) return "YouTube";
   if (text.includes("facebook") || text.includes("fb ")) return "Facebook";
   if (text.includes("twitter") || text.includes(" x ")) return "Twitter/X";
@@ -61,8 +83,13 @@ function getType(name = "") {
   return "Boosts";
 }
 
-// ================= PROFIT MARKUP LOGIC =================
-// Rules: 20% for followers, 30% for likes, 40% for everything else
+/**
+ * =========================================
+ * PROFIT MARKUP LOGIC
+ * Automatically increases provider price for your profit
+ * Rules: 20% for followers, 30% for likes, 40% for everything else
+ * =========================================
+ */
 function calculateSellingRate(originalRate, name = "") {
   const text = name.toLowerCase();
   let margin = 1.40; // Default 40% profit
@@ -74,7 +101,12 @@ function calculateSellingRate(originalRate, name = "") {
   return parseFloat((originalRate * margin).toFixed(2));
 }
 
-// ================= MAIN ROUTE =================
+/**
+ * =========================================
+ * MAIN ROUTE: GET /api/services
+ * This route is called by your dashboard to display available options
+ * =========================================
+ */
 router.get("/", async (req, res) => {
   try {
     const now = Date.now();
@@ -91,7 +123,7 @@ router.get("/", async (req, res) => {
       if (!services.length || (now - cache.time >= CACHE_TIME)) {
         const providerServices = await fetchServicesFromProvider();
         
-        if (providerServices) {
+        if (providerServices && providerServices.length > 0) {
           // Update DB in background
           await Service.deleteMany({});
           await Service.insertMany(providerServices);
@@ -135,7 +167,7 @@ router.get("/", async (req, res) => {
         id: s.serviceId,
         name: s.name,
         category: s.category,
-        rate: sellingRate, // The user only sees your marked-up price
+        rate: sellingRate, // The user only sees your marked-up price in KES
         min: s.min,
         max: s.max
       });
