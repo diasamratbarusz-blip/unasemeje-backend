@@ -28,14 +28,21 @@ const app = express();
  * MIDDLEWARE & CONFIG
  * =========================================
  */
-app.use(cors());
+// ✅ UPDATED CORS: Explicitly allows your Vercel frontend to prevent "Server Error" alerts
+app.use(cors({
+  origin: ["https://unasemeje-frontend.vercel.app", "http://localhost:3000"],
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
+
 app.use(express.json());
-// Serve all files from the 'public' folder (CSS, JS, Images)
+// Serve all files from the 'public' folder
 app.use(express.static(path.join(__dirname, "public"))); 
 
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 const ADMIN_PHONE = "0715509440";
 
+// Connect to MongoDB
 connectDB();
 log("UNASEMEJE ø DIA - Server starting...");
 
@@ -44,16 +51,11 @@ log("UNASEMEJE ø DIA - Server starting...");
  * PAGE ROUTES (Multi-Page Navigation)
  * =========================================
  */
+const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "order-placed"];
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
-app.get("/home", (req, res) => res.sendFile(path.join(__dirname, "public", "home.html")));
-app.get("/platform", (req, res) => res.sendFile(path.join(__dirname, "public", "platform.html")));
-app.get("/packages", (req, res) => res.sendFile(path.join(__dirname, "public", "packages.html")));
-app.get("/new-order", (req, res) => res.sendFile(path.join(__dirname, "public", "new-order.html")));
-app.get("/my-orders", (req, res) => res.sendFile(path.join(__dirname, "public", "my-orders.html")));
-app.get("/services", (req, res) => res.sendFile(path.join(__dirname, "public", "services.html")));
-app.get("/add-funds", (req, res) => res.sendFile(path.join(__dirname, "public", "add-funds.html")));
-app.get("/referrals", (req, res) => res.sendFile(path.join(__dirname, "public", "referrals.html")));
-app.get("/order-placed", (req, res) => res.sendFile(path.join(__dirname, "public", "order-placed.html")));
+pages.forEach(page => {
+  app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${page}.html`)));
+});
 
 /**
  * =========================================
@@ -67,7 +69,7 @@ function auth(req, res, next) {
     const token = header.split(" ")[1];
     req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
-  } catch {
+  } catch (err) {
     return res.status(401).json({ error: "Invalid or expired token" });
   }
 }
@@ -85,11 +87,11 @@ async function giveReferralBonus(userId, orderCost) {
     if (!user || !user.referredBy) return;
     const referrer = await User.findOne({ referralCode: user.referredBy });
     if (!referrer) return;
-    const bonus = orderCost * 0.10; // 10% Bonus
+    const bonus = orderCost * 0.10; // ✅ 10% Bonus for Referrals
     referrer.balance += bonus;
     referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
     await referrer.save();
-    log(`Referral bonus of ${bonus} given to ${referrer.email}`);
+    log(`Referral bonus of KES ${bonus} given to ${referrer.username}`);
   } catch (err) { log("Referral Bonus Error: " + err.message); }
 }
 
@@ -108,9 +110,10 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
+// ✅ PROFIT MARGIN LOGIC
 function applyFinalPrice(originalRate, name) {
   const t = String(name).toLowerCase();
-  let markup = 40; 
+  let markup = 40; // Default flat markup in KES
   if (t.includes("like")) markup = 30;
   if (t.includes("follower")) markup = 25;
   if (t.includes("view")) markup = 35;
@@ -123,15 +126,18 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 
-// REGISTER
+// REGISTER - Only email, password, and phone as requested
 app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
-    const exists = await User.findOne({ $or: [{ email }, { phone }, { username: username?.toLowerCase() }] });
-    if (exists) return res.status(400).json({ error: "Account already exists" });
+    const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }, { username: username?.toLowerCase() }] });
+    if (exists) return res.status(400).json({ error: "Account already exists (Email/Phone/Username)" });
 
     const newUser = await User.create({
-      username: username?.toLowerCase(), email, password, phone,
+      username: username?.toLowerCase(),
+      email: email?.toLowerCase(), 
+      password, 
+      phone,
       referralCode: generateReferralCode(),
       referredBy: referralCode || null,
       balance: 0
@@ -144,8 +150,15 @@ app.post("/api/register", async (req, res) => {
 app.post("/api/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; 
-    const user = await User.findOne({ $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }], password });
-    if (!user) return res.status(400).json({ error: "Invalid credentials" });
+    const user = await User.findOne({ 
+      $or: [
+        { email: identifier?.toLowerCase() }, 
+        { username: identifier?.toLowerCase() }
+      ], 
+      password 
+    });
+    
+    if (!user) return res.status(400).json({ error: "Invalid username/email or password" });
 
     const token = jwt.sign({ id: user._id, email: user.email, username: user.username }, process.env.JWT_SECRET, { expiresIn: "7d" });
     res.json({ token, balance: user.balance });
@@ -160,10 +173,12 @@ app.get("/api/me", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to fetch profile" }); }
 });
 
-// GET SERVICES (Grouped)
+// GET SERVICES (Grouped for easier UI display)
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
+    
+    // Auto-refresh services if DB is empty
     if (!services.length) {
       const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response1 = await axios.get(url1);
@@ -208,15 +223,22 @@ app.post("/api/order", auth, async (req, res) => {
     const finalRate = applyFinalPrice(service.rate, service.name);
     const totalCost = (finalRate / 1000) * Number(quantity);
 
-    if (user.balance < totalCost) return res.status(400).json({ error: `Insufficient balance` });
+    if (user.balance < totalCost) return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost}` });
 
+    // Call Provider API (Delixgains)
     const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
     const providerRes = await axios.get(providerUrl);
     
     if (providerRes.data && providerRes.data.order) {
         const order = await Order.create({
-            userId: user._id, serviceId, serviceName: service.name, 
-            orderId: String(providerRes.data.order), link, quantity, cost: totalCost, status: "pending"
+            userId: user._id, 
+            serviceId, 
+            serviceName: service.name, 
+            orderId: String(providerRes.data.order), 
+            link, 
+            quantity, 
+            cost: totalCost, 
+            status: "pending"
         });
 
         user.balance -= totalCost;
@@ -226,46 +248,55 @@ app.post("/api/order", auth, async (req, res) => {
         res.json({ 
             success: true, 
             orderId: order.orderId, 
-            newBalance: user.balance,
-            serviceName: service.name,
-            totalCost: totalCost 
+            newBalance: user.balance 
         });
-    } else { res.status(400).json({ error: "Provider error" }); }
-  } catch (err) { res.status(500).json({ error: "Server error" }); }
+    } else { 
+        res.status(400).json({ error: providerRes.data.error || "Provider API error" }); 
+    }
+  } catch (err) { 
+    log("Order Error: " + err.message);
+    res.status(500).json({ error: "Server processing error" }); 
+  }
 });
 
 // SYNC HISTORY
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    const activeIds = dbOrders.filter(o => !["completed", "canceled"].includes(o.status)).map(o => o.orderId);
+    const activeIds = dbOrders.filter(o => !["completed", "canceled", "partial"].includes(o.status)).map(o => o.orderId);
 
     if (activeIds.length > 0) {
         const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&orders=${activeIds.join(",")}`;
         const response = await axios.get(url);
         for (let orderId in response.data) {
             const update = response.data[orderId];
-            await Order.findOneAndUpdate({ orderId }, { status: update.status.toLowerCase() });
+            if (update.status) {
+                await Order.findOneAndUpdate({ orderId }, { status: update.status.toLowerCase() });
+            }
         }
     }
     const updatedOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
     res.json(updatedOrders);
-  } catch (err) { res.status(500).json({ error: "Sync failed" }); }
+  } catch (err) { res.status(500).json({ error: "Failed to sync order history" }); }
 });
 
-// DEPOSIT
+// DEPOSIT (Manual M-Pesa tracking)
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { amount, transactionCode } = req.body;
+    if (!amount || !transactionCode) return res.status(400).json({ error: "All fields required" });
+
     const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "Code already used" });
+    if (exists) return res.status(400).json({ error: "Transaction code already submitted/used" });
 
     await Deposit.create({
-      userId: req.user.id, amount: Number(amount),
-      transactionCode: transactionCode.toUpperCase(), status: "pending"
+      userId: req.user.id, 
+      amount: Number(amount),
+      transactionCode: transactionCode.toUpperCase(), 
+      status: "pending"
     });
-    res.json({ success: true, message: "Deposit submitted" });
-  } catch (error) { res.status(500).json({ error: "Deposit failed" }); }
+    res.json({ success: true, message: "Deposit submitted for manual verification" });
+  } catch (error) { res.status(500).json({ error: "Deposit submission failed" }); }
 });
 
 const PORT = process.env.PORT || 3000;
