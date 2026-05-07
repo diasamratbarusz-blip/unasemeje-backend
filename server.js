@@ -28,9 +28,9 @@ const app = express();
  * MIDDLEWARE & CONFIG
  * =========================================
  */
-// ✅ UPDATED CORS: Explicitly allows your Vercel frontend to prevent "Server Error" alerts
+// ✅ UPDATED CORS: Explicitly allows your Vercel frontend and local testing
 app.use(cors({
-  origin: ["https://unasemeje-frontend.vercel.app", "http://localhost:3000"],
+  origin: ["https://unasemeje-frontend.vercel.app", "http://localhost:3000", "http://localhost:5000"],
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
@@ -126,7 +126,7 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 
-// REGISTER - Only email, password, and phone as requested
+// REGISTER - Email, Password, and Phone focus
 app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
@@ -142,7 +142,7 @@ app.post("/api/register", async (req, res) => {
       referredBy: referralCode || null,
       balance: 0
     });
-    res.json({ message: "Registration successful", referralCode: newUser.referralCode });
+    res.json({ success: true, message: "Registration successful", referralCode: newUser.referralCode });
   } catch (err) { res.status(500).json({ error: "Registration failed" }); }
 });
 
@@ -173,12 +173,11 @@ app.get("/api/me", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to fetch profile" }); }
 });
 
-// GET SERVICES (Grouped for easier UI display)
+// GET SERVICES
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
     
-    // Auto-refresh services if DB is empty
     if (!services.length) {
       const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response1 = await axios.get(url1);
@@ -195,9 +194,11 @@ app.get("/api/services", async (req, res) => {
         provider: "PROVIDER1"
       }));
 
-      await Service.deleteMany({});
-      await Service.insertMany(p1Mapped);
-      services = await Service.find();
+      if (p1Mapped.length > 0) {
+          await Service.deleteMany({});
+          await Service.insertMany(p1Mapped);
+          services = await Service.find();
+      }
     }
 
     const grouped = {};
@@ -212,21 +213,25 @@ app.get("/api/services", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to load services" }); }
 });
 
-// PLACE ORDER
+// PLACE ORDER - Improved Error Catching
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
+    
     const service = await Service.findOne({ serviceId });
-    if (!service) return res.status(404).json({ error: "Service not found" });
+    if (!service) return res.status(404).json({ error: "Service no longer available" });
 
     const user = await User.findById(req.user.id);
     const finalRate = applyFinalPrice(service.rate, service.name);
     const totalCost = (finalRate / 1000) * Number(quantity);
 
-    if (user.balance < totalCost) return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost}` });
+    if (user.balance < totalCost) {
+        return res.status(400).json({ error: `Insufficient balance. You need KES ${totalCost.toFixed(2)}` });
+    }
 
     // Call Provider API (Delixgains)
     const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
+    
     const providerRes = await axios.get(providerUrl);
     
     if (providerRes.data && providerRes.data.order) {
@@ -248,14 +253,16 @@ app.post("/api/order", auth, async (req, res) => {
         res.json({ 
             success: true, 
             orderId: order.orderId, 
-            newBalance: user.balance 
+            newBalance: user.balance.toFixed(2)
         });
     } else { 
-        res.status(400).json({ error: providerRes.data.error || "Provider API error" }); 
+        // Forward the specific error from the provider (e.g., "Not enough funds on main API")
+        const apiError = providerRes.data.error || "Provider rejected the request";
+        res.status(400).json({ error: apiError }); 
     }
   } catch (err) { 
-    log("Order Error: " + err.message);
-    res.status(500).json({ error: "Server processing error" }); 
+    log("CRITICAL ORDER ERROR: " + err.message);
+    res.status(500).json({ error: "Server encountered an error communicating with the provider." }); 
   }
 });
 
@@ -263,14 +270,17 @@ app.post("/api/order", auth, async (req, res) => {
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    const activeIds = dbOrders.filter(o => !["completed", "canceled", "partial"].includes(o.status)).map(o => o.orderId);
+    const activeIds = dbOrders
+        .filter(o => !["completed", "canceled", "partial"].includes(o.status))
+        .map(o => o.orderId);
 
     if (activeIds.length > 0) {
         const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&orders=${activeIds.join(",")}`;
         const response = await axios.get(url);
+        
         for (let orderId in response.data) {
             const update = response.data[orderId];
-            if (update.status) {
+            if (update && update.status) {
                 await Order.findOneAndUpdate({ orderId }, { status: update.status.toLowerCase() });
             }
         }
@@ -280,14 +290,14 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to sync order history" }); }
 });
 
-// DEPOSIT (Manual M-Pesa tracking)
+// DEPOSIT
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { amount, transactionCode } = req.body;
-    if (!amount || !transactionCode) return res.status(400).json({ error: "All fields required" });
+    if (!amount || !transactionCode) return res.status(400).json({ error: "Please provide amount and transaction code" });
 
     const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "Transaction code already submitted/used" });
+    if (exists) return res.status(400).json({ error: "This transaction code has already been submitted" });
 
     await Deposit.create({
       userId: req.user.id, 
@@ -295,9 +305,9 @@ app.post("/api/deposit", auth, async (req, res) => {
       transactionCode: transactionCode.toUpperCase(), 
       status: "pending"
     });
-    res.json({ success: true, message: "Deposit submitted for manual verification" });
+    res.json({ success: true, message: "Receipt received. We are verifying your M-Pesa deposit." });
   } catch (error) { res.status(500).json({ error: "Deposit submission failed" }); }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA - Online on port ${PORT}`));
