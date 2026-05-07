@@ -6,7 +6,6 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const path = require("path");
-const fs = require("fs"); 
 const mongoose = require("mongoose");
 
 const connectDB = require("./config/db");
@@ -29,6 +28,7 @@ const app = express();
  * MIDDLEWARE & CONFIG
  * =========================================
  */
+// ✅ UPDATED CORS: Explicitly allows your Vercel frontend to prevent "Server Error" alerts
 app.use(cors({
   origin: ["https://unasemeje-frontend.vercel.app", "http://localhost:3000"],
   methods: ["GET", "POST", "PUT", "DELETE"],
@@ -36,42 +36,25 @@ app.use(cors({
 }));
 
 app.use(express.json());
-
-// Serve static files from current directory
-app.use(express.static(__dirname)); 
+// Serve all files from the 'public' folder
+app.use(express.static(path.join(__dirname, "public"))); 
 
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 const ADMIN_PHONE = "0715509440";
 
+// Connect to MongoDB
 connectDB();
 log("UNASEMEJE ø DIA - Server starting...");
 
 /**
  * =========================================
- * PAGE ROUTES (Advanced Path Detection)
+ * PAGE ROUTES (Multi-Page Navigation)
  * =========================================
- * This fix prevents the "src/src/index.html" error on Render.
- * It checks root first, then /src, then defaults to the filename.
  */
-const getFilePath = (fileName) => {
-    const rootPath = path.join(__dirname, fileName);
-    const srcPath = path.join(__dirname, 'src', fileName);
-    
-    if (fs.existsSync(rootPath)) return rootPath;
-    if (fs.existsSync(srcPath)) return srcPath;
-    return rootPath; // Fallback to root
-};
-
 const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "order-placed"];
-
-app.get("/", (req, res) => {
-    res.sendFile(getFilePath("index.html"));
-});
-
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 pages.forEach(page => {
-  app.get(`/${page}`, (req, res) => {
-    res.sendFile(getFilePath(`${page}.html`));
-  });
+  app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${page}.html`)));
 });
 
 /**
@@ -104,7 +87,7 @@ async function giveReferralBonus(userId, orderCost) {
     if (!user || !user.referredBy) return;
     const referrer = await User.findOne({ referralCode: user.referredBy });
     if (!referrer) return;
-    const bonus = orderCost * 0.10; 
+    const bonus = orderCost * 0.10; // ✅ 10% Bonus for Referrals
     referrer.balance += bonus;
     referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
     await referrer.save();
@@ -127,9 +110,10 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
+// ✅ PROFIT MARGIN LOGIC
 function applyFinalPrice(originalRate, name) {
   const t = String(name).toLowerCase();
-  let markup = 40; 
+  let markup = 40; // Default flat markup in KES
   if (t.includes("like")) markup = 30;
   if (t.includes("follower")) markup = 25;
   if (t.includes("view")) markup = 35;
@@ -142,6 +126,7 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 
+// REGISTER - Only email, password, and phone as requested
 app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
@@ -161,11 +146,15 @@ app.post("/api/register", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Registration failed" }); }
 });
 
+// LOGIN
 app.post("/api/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; 
     const user = await User.findOne({ 
-      $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }], 
+      $or: [
+        { email: identifier?.toLowerCase() }, 
+        { username: identifier?.toLowerCase() }
+      ], 
       password 
     });
     
@@ -176,6 +165,7 @@ app.post("/api/login", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Login failed" }); }
 });
 
+// GET PROFILE
 app.get("/api/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-password");
@@ -183,9 +173,12 @@ app.get("/api/me", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to fetch profile" }); }
 });
 
+// GET SERVICES (Grouped for easier UI display)
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
+    
+    // Auto-refresh services if DB is empty
     if (!services.length) {
       const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response1 = await axios.get(url1);
@@ -219,6 +212,7 @@ app.get("/api/services", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to load services" }); }
 });
 
+// PLACE ORDER
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -231,20 +225,31 @@ app.post("/api/order", auth, async (req, res) => {
 
     if (user.balance < totalCost) return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost}` });
 
+    // Call Provider API (Delixgains)
     const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
     const providerRes = await axios.get(providerUrl);
     
     if (providerRes.data && providerRes.data.order) {
         const order = await Order.create({
-            userId: user._id, serviceId, serviceName: service.name, 
-            orderId: String(providerRes.data.order), link, quantity, cost: totalCost, status: "pending"
+            userId: user._id, 
+            serviceId, 
+            serviceName: service.name, 
+            orderId: String(providerRes.data.order), 
+            link, 
+            quantity, 
+            cost: totalCost, 
+            status: "pending"
         });
 
         user.balance -= totalCost;
         await user.save();
         await giveReferralBonus(user._id, totalCost);
 
-        res.json({ success: true, orderId: order.orderId, newBalance: user.balance });
+        res.json({ 
+            success: true, 
+            orderId: order.orderId, 
+            newBalance: user.balance 
+        });
     } else { 
         res.status(400).json({ error: providerRes.data.error || "Provider API error" }); 
     }
@@ -254,6 +259,7 @@ app.post("/api/order", auth, async (req, res) => {
   }
 });
 
+// SYNC HISTORY
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
@@ -274,19 +280,22 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to sync order history" }); }
 });
 
+// DEPOSIT (Manual M-Pesa tracking)
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { amount, transactionCode } = req.body;
     if (!amount || !transactionCode) return res.status(400).json({ error: "All fields required" });
 
     const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "Transaction code already used" });
+    if (exists) return res.status(400).json({ error: "Transaction code already submitted/used" });
 
     await Deposit.create({
-      userId: req.user.id, amount: Number(amount),
-      transactionCode: transactionCode.toUpperCase(), status: "pending"
+      userId: req.user.id, 
+      amount: Number(amount),
+      transactionCode: transactionCode.toUpperCase(), 
+      status: "pending"
     });
-    res.json({ success: true, message: "Deposit submitted" });
+    res.json({ success: true, message: "Deposit submitted for manual verification" });
   } catch (error) { res.status(500).json({ error: "Deposit submission failed" }); }
 });
 
