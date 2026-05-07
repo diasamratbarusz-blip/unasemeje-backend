@@ -6,7 +6,7 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const path = require("path");
-const fs = require("fs"); // Added for file checking
+const fs = require("fs"); 
 const mongoose = require("mongoose");
 
 const connectDB = require("./config/db");
@@ -37,7 +37,7 @@ app.use(cors({
 
 app.use(express.json());
 
-// Serve static files from root
+// Serve static files from current directory
 app.use(express.static(__dirname)); 
 
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
@@ -48,15 +48,18 @@ log("UNASEMEJE ø DIA - Server starting...");
 
 /**
  * =========================================
- * PAGE ROUTES (Smart Path Detection)
+ * PAGE ROUTES (Advanced Path Detection)
  * =========================================
- * This handles the Render ENOENT error by checking both root and /src
+ * This fix prevents the "src/src/index.html" error on Render.
+ * It checks root first, then /src, then defaults to the filename.
  */
 const getFilePath = (fileName) => {
     const rootPath = path.join(__dirname, fileName);
     const srcPath = path.join(__dirname, 'src', fileName);
+    
     if (fs.existsSync(rootPath)) return rootPath;
-    return srcPath; 
+    if (fs.existsSync(srcPath)) return srcPath;
+    return rootPath; // Fallback to root
 };
 
 const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "order-placed"];
@@ -139,7 +142,6 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 
-// REGISTER
 app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
@@ -159,7 +161,6 @@ app.post("/api/register", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Registration failed" }); }
 });
 
-// LOGIN
 app.post("/api/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; 
@@ -175,7 +176,6 @@ app.post("/api/login", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Login failed" }); }
 });
 
-// GET PROFILE
 app.get("/api/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-password");
@@ -183,7 +183,6 @@ app.get("/api/me", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to fetch profile" }); }
 });
 
-// GET SERVICES
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
@@ -220,7 +219,6 @@ app.get("/api/services", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to load services" }); }
 });
 
-// PLACE ORDER
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -256,7 +254,6 @@ app.post("/api/order", auth, async (req, res) => {
   }
 });
 
-// SYNC HISTORY
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
@@ -277,7 +274,6 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to sync order history" }); }
 });
 
-// DEPOSIT
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { amount, transactionCode } = req.body;
