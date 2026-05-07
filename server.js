@@ -36,15 +36,17 @@ app.use(cors({
 }));
 
 app.use(express.json());
-// Serve all files from the 'public' folder
-app.use(express.static(path.join(__dirname, "public"))); 
+
+// ✅ FIX: Removed "public" folder reference. 
+// This tells Express to serve static files (JS, CSS, Images) directly from the root.
+app.use(express.static(__dirname)); 
 
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 const ADMIN_PHONE = "0715509440";
 
 // Connect to MongoDB
 connectDB();
-log("UNASEMEJE ø DIA - Server starting...");
+log("UNASEMEJE ø DIA - Server starting from root directory...");
 
 /**
  * =========================================
@@ -52,9 +54,12 @@ log("UNASEMEJE ø DIA - Server starting...");
  * =========================================
  */
 const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "order-placed"];
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
+
+// ✅ FIX: Removed "/public/" from all sendFile paths
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+
 pages.forEach(page => {
-  app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${page}.html`)));
+  app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, `${page}.html`)));
 });
 
 /**
@@ -126,7 +131,7 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 
-// REGISTER - Only email, password, and phone as requested
+// REGISTER
 app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
@@ -173,12 +178,11 @@ app.get("/api/me", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to fetch profile" }); }
 });
 
-// GET SERVICES (Grouped for easier UI display)
+// GET SERVICES
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
     
-    // Auto-refresh services if DB is empty
     if (!services.length) {
       const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response1 = await axios.get(url1);
@@ -225,7 +229,6 @@ app.post("/api/order", auth, async (req, res) => {
 
     if (user.balance < totalCost) return res.status(400).json({ error: `Insufficient balance. Required: KES ${totalCost}` });
 
-    // Call Provider API (Delixgains)
     const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
     const providerRes = await axios.get(providerUrl);
     
@@ -280,14 +283,14 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to sync order history" }); }
 });
 
-// DEPOSIT (Manual M-Pesa tracking)
+// DEPOSIT
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { amount, transactionCode } = req.body;
     if (!amount || !transactionCode) return res.status(400).json({ error: "All fields required" });
 
     const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "Transaction code already submitted/used" });
+    if (exists) return res.status(400).json({ error: "Transaction code already used" });
 
     await Deposit.create({
       userId: req.user.id, 
@@ -295,7 +298,7 @@ app.post("/api/deposit", auth, async (req, res) => {
       transactionCode: transactionCode.toUpperCase(), 
       status: "pending"
     });
-    res.json({ success: true, message: "Deposit submitted for manual verification" });
+    res.json({ success: true, message: "Deposit submitted" });
   } catch (error) { res.status(500).json({ error: "Deposit submission failed" }); }
 });
 
