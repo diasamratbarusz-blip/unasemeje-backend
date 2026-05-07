@@ -62,20 +62,20 @@ const OrderSchema = new mongoose.Schema(
     },
 
     /* ================= PROVIDER DATA (PROFIT TRACKING) ================= */
-    // "charge" from Delixgains API
+    // "charge" from Provider API (usually in USD)
     providerCharge: {
       type: Number, 
       default: 0
     },
 
-    // "currency" from Delixgains API
+    // "currency" from Provider API
     providerCurrency: {
       type: String,
       default: "USD",
       uppercase: true
     },
 
-    // Identifies provider (Delixgains = PROVIDER1)
+    // Identifies provider (e.g., Delixgains)
     provider: {
       type: String,
       default: "PROVIDER1",
@@ -83,7 +83,7 @@ const OrderSchema = new mongoose.Schema(
       index: true
     },
 
-    // The "order" ID returned by Delixgains
+    // The unique ID returned by the external API
     orderId: {
       type: String,
       required: [true, "Provider Order ID is required"],
@@ -100,13 +100,13 @@ const OrderSchema = new mongoose.Schema(
       trim: true
     },
 
-    // "start_count" from Provider
+    // Starting count of likes/followers when order was placed
     startCount: {
       type: Number,
       default: 0
     },
 
-    // "remains" from Provider
+    // Number of units remaining to be delivered
     remains: {
       type: Number,
       default: 0
@@ -118,9 +118,16 @@ const OrderSchema = new mongoose.Schema(
 );
 
 /* ================= INDEXING ================= */
-// Optimized to show users their most recent orders first
+/**
+ * Optimized to show users their most recent orders first.
+ * Compound index speeds up user dashboard performance.
+ */
 OrderSchema.index({ userId: 1, createdAt: -1 });
-// Allows quick lookups for active orders for the sync engine
+
+/**
+ * Allows quick lookups for active orders for the sync engine 
+ * (Filters for 'pending', 'processing', 'inprogress').
+ */
 OrderSchema.index({ status: 1 });
 
 /* ================= MIDDLEWARE ================= */
@@ -133,12 +140,12 @@ OrderSchema.pre("save", function (next) {
     this.cost = Math.round(this.cost * 100) / 100; 
   }
 
-  // Round provider USD charge to 5 decimals
+  // Round provider charge to 5 decimals for high accuracy in profit tracking
   if (typeof this.providerCharge === 'number' && !isNaN(this.providerCharge)) {
     this.providerCharge = Math.round(this.providerCharge * 100000) / 100000; 
   }
 
-  // Prevent negative tracking values from API glitches
+  // Safety checks for tracking values
   if (this.remains < 0 || isNaN(this.remains)) this.remains = 0;
   if (this.startCount < 0 || isNaN(this.startCount)) this.startCount = 0;
 
