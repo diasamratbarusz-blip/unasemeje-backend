@@ -5,7 +5,7 @@ const mongoose = require("mongoose");
  * ORDER MODEL (UNASEMEJE ø DIA)
  * =========================================
  * This model stores all details for social media orders.
- * Integrated with Delixgains API response structure.
+ * Specifically updated to ALLOW multiple orders on the same link.
  */
 
 const OrderSchema = new mongoose.Schema(
@@ -37,6 +37,7 @@ const OrderSchema = new mongoose.Schema(
       type: String,
       required: [true, "Target link (URL) is required"],
       trim: true,
+      // unique: false ensures a user can order for the same link multiple times
       unique: false 
     },
 
@@ -48,7 +49,7 @@ const OrderSchema = new mongoose.Schema(
 
     /* ================= PRICING (CUSTOMER) ================= */
     cost: {
-      type: Number, // Amount charged to the Kenyan user in KES
+      type: Number, // Amount charged in KES
       required: [true, "Cost calculation is required"],
       default: 0
     },
@@ -61,13 +62,13 @@ const OrderSchema = new mongoose.Schema(
     },
 
     /* ================= PROVIDER DATA (PROFIT TRACKING) ================= */
-    // "charge" from Delixgains API (usually what you paid in USD)
+    // "charge" from Delixgains API
     providerCharge: {
       type: Number, 
       default: 0
     },
 
-    // "currency" from Delixgains API (usually USD)
+    // "currency" from Delixgains API
     providerCurrency: {
       type: String,
       default: "USD",
@@ -117,8 +118,10 @@ const OrderSchema = new mongoose.Schema(
 );
 
 /* ================= INDEXING ================= */
-// Optimized for Dashboard: Shows newest orders first for a specific user
+// Optimized to show users their most recent orders first
 OrderSchema.index({ userId: 1, createdAt: -1 });
+// Allows quick lookups for active orders for the sync engine
+OrderSchema.index({ status: 1 });
 
 /* ================= MIDDLEWARE ================= */
 /**
@@ -130,12 +133,12 @@ OrderSchema.pre("save", function (next) {
     this.cost = Math.round(this.cost * 100) / 100; 
   }
 
-  // Round provider USD charge to 5 decimals (e.g., 0.27819)
+  // Round provider USD charge to 5 decimals
   if (typeof this.providerCharge === 'number' && !isNaN(this.providerCharge)) {
     this.providerCharge = Math.round(this.providerCharge * 100000) / 100000; 
   }
 
-  // Prevent negative tracking values
+  // Prevent negative tracking values from API glitches
   if (this.remains < 0 || isNaN(this.remains)) this.remains = 0;
   if (this.startCount < 0 || isNaN(this.startCount)) this.startCount = 0;
 
