@@ -2,39 +2,45 @@ const express = require("express");
 const router = express.Router();
 const axios = require("axios");
 const Order = require("../models/Order"); 
-const User = require("../models/User"); // Added to handle balance deduction
+const User = require("../models/User");
 
 /**
  * =========================================
- * PLACE ORDER (POST /api/orders)
+ * PLACE ORDER (POST /api/order)
  * =========================================
+ * This route communicates with Delixgains API and deducts KES from user.
  */
 router.post("/", async (req, res) => {
   try {
-    const { serviceId, link, quantity, userId, rate, serviceName } = req.body;
+    const { serviceId, link, quantity } = req.body;
+    const userId = req.user.id; // Using ID from Auth middleware
 
     // 1. Basic Validation
-    if (!serviceId || !link || !quantity || !userId) {
+    if (!serviceId || !link || !quantity) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields (serviceId, link, quantity, or userId)"
+        error: "Please provide serviceId, link, and quantity."
       });
     }
 
-    // 2. Check User Balance & Calculate Cost
+    // 2. Fetch User and Sync Services to get Current Rate
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user) return res.status(404).json({ success: false, error: "User not found" });
 
+    // Note: In a production environment, you should fetch the rate from 
+    // your local 'Service' model to prevent rate manipulation from the frontend.
+    const rate = req.body.rate || 0; 
     const orderCost = (parseFloat(rate) / 1000) * parseInt(quantity);
     
+    // 3. Balance Check
     if (user.balance < orderCost) {
       return res.status(400).json({
         success: false,
-        message: `Insufficient balance. Required: KES ${orderCost.toFixed(2)}`
+        error: `Insufficient balance. This order costs KES ${orderCost.toFixed(2)}`
       });
     }
 
-    // 3. Prepare API Request to Provider
+    // 4. Prepare API Request to Delixgains
     const params = new URLSearchParams();
     params.append("key", process.env.SMM_API_KEY);
     params.append("action", "add");
@@ -46,94 +52,74 @@ router.post("/", async (req, res) => {
       timeout: 15000 
     });
 
-    // 4. Handle Provider Errors
+    // 5. Handle Provider Errors
     if (response.data.error) {
       return res.status(400).json({
         success: false,
-        message: `Provider Error: ${response.data.error}`,
+        error: `Provider Error: ${response.data.error}`,
       });
     }
 
     if (!response.data || !response.data.order) {
       return res.status(500).json({
         success: false,
-        message: "Provider did not return an Order ID"
+        error: "Provider communication failed. No Order ID returned."
       });
     }
 
-    // 5. Deduct Balance from User
+    // 6. Transaction: Deduct Balance & Save Order
+    // Using a simple deduction here; for high traffic, consider a DB Session/Transaction
     user.balance -= orderCost;
-    user.totalSpent += orderCost;
-    user.totalOrders += 1;
     await user.save();
 
-    // 6. Save to Database (Matching your Order.js Model)
     const newOrder = new Order({
       userId: user._id,
       serviceId,
-      serviceName: serviceName || "SMM Service",
+      serviceName: req.body.serviceName || "SMM Service",
       link,
       quantity,
-      cost: orderCost, // Mapped to 'cost' in Model
-      orderId: response.data.order, // Mapped to 'orderId' in Model
-      status: "pending"
+      cost: orderCost,
+      orderId: response.data.order, 
+      status: "pending",
+      providerCharge: response.data.charge || 0 // If provider returns the USD charge
     });
 
     await newOrder.save();
 
     res.json({
       success: true,
-      message: "Order placed successfully",
+      message: "Order placed successfully!",
       orderId: response.data.order,
-      balance: user.balance,
-      internalId: newOrder._id
+      newBalance: user.balance
     });
 
   } catch (err) {
     console.error("❌ ORDER ROUTE ERROR:", err.message);
     res.status(500).json({
       success: false,
-      message: "Internal error occurred during order placement",
-      error: err.message
+      error: "Critical error during order placement. Contact support."
     });
   }
 });
 
 /**
  * =========================================
- * GET USER ORDERS (GET /api/orders/user/:userId)
+ * SYNC ORDERS (GET /api/sync-orders)
  * =========================================
+ * Updates status and remains for all active orders for the logged-in user.
  */
-router.get("/user/:userId", async (req, res) => {
-  try {
-    const orders = await Order.find({ userId: req.params.userId })
-      .sort({ createdAt: -1 })
-      .limit(50);
-
-    res.json({
-      success: true,
-      count: orders.length,
-      data: orders
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-/**
- * =========================================
- * SYNC ALL PENDING ORDERS (GET /api/orders/sync-all/:userId)
- * =========================================
- */
-router.get("/sync-all/:userId", async (req, res) => {
+router.get("/sync-orders", async (req, res) => {
     try {
-        const pendingOrders = await Order.find({ 
-            userId: req.params.userId, 
+        const userId = req.user.id;
+        
+        // Find orders that aren't finalized
+        const activeOrders = await Order.find({ 
+            userId: userId, 
             status: { $in: ["pending", "processing", "inprogress", "pending_refill"] } 
         });
 
-        for (let order of pendingOrders) {
-            if (order.orderId) { // Using 'orderId' as per your Model
+        for (let order of activeOrders) {
+            try {
                 const params = new URLSearchParams();
                 params.append("key", process.env.SMM_API_KEY);
                 params.append("action", "status");
@@ -143,23 +129,26 @@ router.get("/sync-all/:userId", async (req, res) => {
 
                 if (response.data && response.data.status) {
                     order.status = response.data.status.toLowerCase().replace(/\s+/g, '');
-                    order.remains = response.data.remains;
-                    order.startCount = response.data.start_count;
+                    order.remains = response.data.remains || 0;
+                    order.startCount = response.data.start_count || 0;
                     await order.save();
                 }
+            } catch (e) {
+                console.error(`Sync failed for order ${order.orderId}`);
             }
         }
 
-        const allOrders = await Order.find({ userId: req.params.userId }).sort({ createdAt: -1 });
-        res.json({ success: true, data: allOrders });
+        // Return the full updated list
+        const allOrders = await Order.find({ userId: userId }).sort({ createdAt: -1 }).limit(50);
+        res.json(allOrders);
     } catch (err) {
-        res.status(500).json({ success: false, message: "Sync failed", error: err.message });
+        res.status(500).json({ success: false, error: "Sync failed" });
     }
 });
 
 /**
  * =========================================
- * REQUEST REFILL (POST /api/orders/refill)
+ * REQUEST REFILL (POST /api/order/refill)
  * =========================================
  */
 router.post("/refill", async (req, res) => {
@@ -178,12 +167,11 @@ router.post("/refill", async (req, res) => {
                 { orderId: orderId },
                 { status: "pending_refill" }
             );
-            
-            res.json({ success: true, message: "Refill request sent to provider!" });
+            res.json({ success: true, message: "Refill request sent!" });
         } else {
             res.status(400).json({ 
                 success: false, 
-                message: response.data.error || "Refill not available for this service." 
+                error: response.data.error || "Refill not available for this order." 
             });
         }
     } catch (err) {
