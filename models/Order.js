@@ -62,28 +62,29 @@ const OrderSchema = new mongoose.Schema(
     },
 
     /* ================= PROVIDER DATA (PROFIT TRACKING) ================= */
-    // "charge" from Provider API (usually in USD)
+    /**
+     * providerCharge stores the actual cost from the API (e.g., Delixgains).
+     * This allows you to calculate total profit (cost - providerCharge).
+     */
     providerCharge: {
       type: Number, 
       default: 0
     },
 
-    // "currency" from Provider API
     providerCurrency: {
       type: String,
       default: "USD",
       uppercase: true
     },
 
-    // Identifies provider (e.g., Delixgains)
     provider: {
       type: String,
-      default: "PROVIDER1",
+      default: "DELIXGAINS",
       uppercase: true,
       index: true
     },
 
-    // The unique ID returned by the external API
+    // The unique ID returned by the external API (Critical for syncing)
     orderId: {
       type: String,
       required: [true, "Provider Order ID is required"],
@@ -98,6 +99,9 @@ const OrderSchema = new mongoose.Schema(
       lowercase: true,
       index: true,
       trim: true
+      /**
+       * Common statuses: pending, inprogress, completed, partial, canceled
+       */
     },
 
     // Starting count of likes/followers when order was placed
@@ -119,33 +123,31 @@ const OrderSchema = new mongoose.Schema(
 
 /* ================= INDEXING ================= */
 /**
- * Optimized to show users their most recent orders first.
- * Compound index speeds up user dashboard performance.
+ * Optimized for the "My Orders" page to show the latest history instantly.
  */
 OrderSchema.index({ userId: 1, createdAt: -1 });
 
 /**
- * Allows quick lookups for active orders for the sync engine 
- * (Filters for 'pending', 'processing', 'inprogress').
+ * Optimized for the background sync engine to quickly find active orders.
  */
 OrderSchema.index({ status: 1 });
 
 /* ================= MIDDLEWARE ================= */
 /**
- * Pre-save logic to ensure data integrity and rounding.
+ * Pre-save logic to ensure data integrity and proper rounding.
  */
 OrderSchema.pre("save", function (next) {
-  // Round customer KES cost to 2 decimals
+  // Round customer KES cost to 2 decimal places for billing clarity
   if (typeof this.cost === 'number' && !isNaN(this.cost)) {
     this.cost = Math.round(this.cost * 100) / 100; 
   }
 
-  // Round provider charge to 5 decimals for high accuracy in profit tracking
+  // Round provider charge for precision in profit analysis
   if (typeof this.providerCharge === 'number' && !isNaN(this.providerCharge)) {
     this.providerCharge = Math.round(this.providerCharge * 100000) / 100000; 
   }
 
-  // Safety checks for tracking values
+  // Safety checks for numerical values
   if (this.remains < 0 || isNaN(this.remains)) this.remains = 0;
   if (this.startCount < 0 || isNaN(this.startCount)) this.startCount = 0;
 
