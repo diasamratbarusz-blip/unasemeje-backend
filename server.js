@@ -6,6 +6,7 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const path = require("path");
+const fs = require("fs"); // Added for file checking
 const mongoose = require("mongoose");
 
 const connectDB = require("./config/db");
@@ -28,7 +29,6 @@ const app = express();
  * MIDDLEWARE & CONFIG
  * =========================================
  */
-// ✅ UPDATED CORS: Explicitly allows your Vercel frontend to prevent "Server Error" alerts
 app.use(cors({
   origin: ["https://unasemeje-frontend.vercel.app", "http://localhost:3000"],
   methods: ["GET", "POST", "PUT", "DELETE"],
@@ -37,29 +37,38 @@ app.use(cors({
 
 app.use(express.json());
 
-// ✅ FIX: Removed "public" folder reference. 
-// This tells Express to serve static files (JS, CSS, Images) directly from the root.
+// Serve static files from root
 app.use(express.static(__dirname)); 
 
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 const ADMIN_PHONE = "0715509440";
 
-// Connect to MongoDB
 connectDB();
-log("UNASEMEJE ø DIA - Server starting from root directory...");
+log("UNASEMEJE ø DIA - Server starting...");
 
 /**
  * =========================================
- * PAGE ROUTES (Multi-Page Navigation)
+ * PAGE ROUTES (Smart Path Detection)
  * =========================================
+ * This handles the Render ENOENT error by checking both root and /src
  */
+const getFilePath = (fileName) => {
+    const rootPath = path.join(__dirname, fileName);
+    const srcPath = path.join(__dirname, 'src', fileName);
+    if (fs.existsSync(rootPath)) return rootPath;
+    return srcPath; 
+};
+
 const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "order-placed"];
 
-// ✅ FIX: Removed "/public/" from all sendFile paths
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/", (req, res) => {
+    res.sendFile(getFilePath("index.html"));
+});
 
 pages.forEach(page => {
-  app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, `${page}.html`)));
+  app.get(`/${page}`, (req, res) => {
+    res.sendFile(getFilePath(`${page}.html`));
+  });
 });
 
 /**
@@ -92,7 +101,7 @@ async function giveReferralBonus(userId, orderCost) {
     if (!user || !user.referredBy) return;
     const referrer = await User.findOne({ referralCode: user.referredBy });
     if (!referrer) return;
-    const bonus = orderCost * 0.10; // ✅ 10% Bonus for Referrals
+    const bonus = orderCost * 0.10; 
     referrer.balance += bonus;
     referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
     await referrer.save();
@@ -115,10 +124,9 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ✅ PROFIT MARGIN LOGIC
 function applyFinalPrice(originalRate, name) {
   const t = String(name).toLowerCase();
-  let markup = 40; // Default flat markup in KES
+  let markup = 40; 
   if (t.includes("like")) markup = 30;
   if (t.includes("follower")) markup = 25;
   if (t.includes("view")) markup = 35;
@@ -156,10 +164,7 @@ app.post("/api/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; 
     const user = await User.findOne({ 
-      $or: [
-        { email: identifier?.toLowerCase() }, 
-        { username: identifier?.toLowerCase() }
-      ], 
+      $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }], 
       password 
     });
     
@@ -182,7 +187,6 @@ app.get("/api/me", auth, async (req, res) => {
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
-    
     if (!services.length) {
       const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response1 = await axios.get(url1);
@@ -234,25 +238,15 @@ app.post("/api/order", auth, async (req, res) => {
     
     if (providerRes.data && providerRes.data.order) {
         const order = await Order.create({
-            userId: user._id, 
-            serviceId, 
-            serviceName: service.name, 
-            orderId: String(providerRes.data.order), 
-            link, 
-            quantity, 
-            cost: totalCost, 
-            status: "pending"
+            userId: user._id, serviceId, serviceName: service.name, 
+            orderId: String(providerRes.data.order), link, quantity, cost: totalCost, status: "pending"
         });
 
         user.balance -= totalCost;
         await user.save();
         await giveReferralBonus(user._id, totalCost);
 
-        res.json({ 
-            success: true, 
-            orderId: order.orderId, 
-            newBalance: user.balance 
-        });
+        res.json({ success: true, orderId: order.orderId, newBalance: user.balance });
     } else { 
         res.status(400).json({ error: providerRes.data.error || "Provider API error" }); 
     }
@@ -293,10 +287,8 @@ app.post("/api/deposit", auth, async (req, res) => {
     if (exists) return res.status(400).json({ error: "Transaction code already used" });
 
     await Deposit.create({
-      userId: req.user.id, 
-      amount: Number(amount),
-      transactionCode: transactionCode.toUpperCase(), 
-      status: "pending"
+      userId: req.user.id, amount: Number(amount),
+      transactionCode: transactionCode.toUpperCase(), status: "pending"
     });
     res.json({ success: true, message: "Deposit submitted" });
   } catch (error) { res.status(500).json({ error: "Deposit submission failed" }); }
