@@ -2,10 +2,10 @@ const mongoose = require("mongoose");
 
 /**
  * =========================
- * SERVICE MODEL (SMM PANEL)
+ * SERVICE MODEL (UNASEMEJE ø DIA)
  * =========================
- * Stores services from provider + markup pricing
- * Supports filtering, grouping, and fast dashboard loading
+ * Stores services from provider + markup pricing.
+ * Supports filtering, grouping, and fast dashboard loading.
  */
 
 const ServiceSchema = new mongoose.Schema(
@@ -36,7 +36,7 @@ const ServiceSchema = new mongoose.Schema(
 
     /* ================= PRICING ================= */
 
-    // 🔴 ORIGINAL PROVIDER PRICE (VERY IMPORTANT)
+    // 🔴 ORIGINAL PROVIDER PRICE (AS FETCHED FROM API)
     originalRate: {
       type: Number,
       default: 0
@@ -49,7 +49,7 @@ const ServiceSchema = new mongoose.Schema(
       default: 0
     },
 
-    // 🟢 FINAL SELLING PRICE (AFTER YOUR MARKUP)
+    // 🟢 FINAL SELLING PRICE (AFTER UNASEMEJE ø DIA MARKUP)
     sellingRate: {
       type: Number,
       default: 0
@@ -90,7 +90,7 @@ const ServiceSchema = new mongoose.Schema(
     /* ================= PROVIDER META ================= */
     provider: {
       type: String,
-      default: "default"
+      default: "PROVIDER1"
     }
 
   },
@@ -105,19 +105,19 @@ ServiceSchema.index({ category: 1 });
 
 /* ================= AUTO PRICE CALCULATION ================= */
 /**
- * This ensures:
+ * logic:
  * - sellingRate is ALWAYS updated
- * - your markup is always applied automatically
+ * - markup is applied based on service type
  */
 
 function applyMarkup(service) {
   const name = (service.name || "").toLowerCase();
 
-  let markup = 40; // default
+  let markup = 40; // Default flat markup in KES
 
-  if (name.includes("likes")) markup = 30;
-  else if (name.includes("followers")) markup = 20;
-  else if (name.includes("views")) markup = 40;
+  if (name.includes("like")) markup = 30; //
+  else if (name.includes("follower")) markup = 25; // Updated to match business logic
+  else if (name.includes("view")) markup = 35; // Updated to match business logic
   else if (name.includes("save")) markup = 40;
 
   return Number(service.rate || 0) + markup;
@@ -126,12 +126,12 @@ function applyMarkup(service) {
 /* ================= BEFORE SAVE HOOK ================= */
 ServiceSchema.pre("save", function (next) {
   try {
-    // keep original rate safe
+    // Keep original rate safe
     if (!this.originalRate) {
       this.originalRate = this.rate;
     }
 
-    // apply markup
+    // Apply markup
     this.sellingRate = applyMarkup(this);
 
     next();
@@ -150,12 +150,11 @@ ServiceSchema.pre("findOneAndUpdate", function (next) {
       const rate = update.rate || 0;
 
       let markup = 40;
-
       const n = name.toLowerCase();
 
-      if (n.includes("likes")) markup = 30;
-      else if (n.includes("followers")) markup = 20;
-      else if (n.includes("views")) markup = 40;
+      if (n.includes("like")) markup = 30; //
+      else if (n.includes("follower")) markup = 25; //
+      else if (n.includes("view")) markup = 35; //
       else if (n.includes("save")) markup = 40;
 
       update.sellingRate = rate + markup;
