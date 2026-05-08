@@ -159,28 +159,30 @@ app.post("/api/login", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Login failed" }); }
 });
 
-// GET SERVICES - Sync with Delixgains
+// GET SERVICES - Updated with forceRefresh logic and cleanServiceName integration
 app.get("/api/services", async (req, res) => {
   try {
+    // Check if "refresh" is in the URL (e.g., /api/services?refresh=true)
+    const forceRefresh = req.query.refresh === "true";
     let services = await Service.find();
-    if (!services.length) {
+    
+    if (!services.length || forceRefresh) {
       const url = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
       const response = await axios.get(url);
       const list = Array.isArray(response.data) ? response.data : [];
 
-      const mapped = list.map(s => ({
-        serviceId: String(s.service),
-        name: cleanServiceName(s.name),
-        rate: Number(s.rate || 0),
-        min: Number(s.min || 1),
-        max: Number(s.max || 10000),
-        category: s.category || "General",
-        platform: detectPlatform(s),
-        provider: "DELIXGAINS"
-      }));
-
-      if (mapped.length > 0) {
-          await Service.deleteMany({});
+      if (list.length > 0) {
+          await Service.deleteMany({}); // Clears the old services
+          const mapped = list.map(s => ({
+            serviceId: String(s.service),
+            name: cleanServiceName(s.name),
+            rate: Number(s.rate || 0),
+            min: Number(s.min || 1),
+            max: Number(s.max || 10000),
+            category: s.category || "General",
+            platform: detectPlatform(s),
+            provider: "DELIXGAINS"
+          }));
           await Service.insertMany(mapped);
           services = await Service.find();
       }
