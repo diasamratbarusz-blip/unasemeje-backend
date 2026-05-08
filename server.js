@@ -37,6 +37,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public"))); 
 
+// STRICT OWNER CREDENTIALS
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 const ADMIN_PHONE = "0715509440";
 
@@ -61,7 +62,7 @@ function auth(req, res, next) {
   }
 }
 
-// STRICT ADMIN MIDDLEWARE
+// STRICT ADMIN MIDDLEWARE: Checks for specific owner email/phone
 function adminAuth(req, res, next) {
   auth(req, res, () => {
     const isAuthorized = req.user.email === ADMIN_EMAIL || req.user.phone === ADMIN_PHONE;
@@ -350,7 +351,7 @@ app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
  * SERVER BOOT
  * =========================================
  */
-const pagesList = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "admin"];
+const pagesList = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "admin", "dashboard"];
 pagesList.forEach(page => {
   app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${page}.html`)));
 });
