@@ -46,17 +46,6 @@ log("UNASEMEJE ø DIA - Server starting...");
 
 /**
  * =========================================
- * PAGE ROUTES
- * =========================================
- */
-const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "order-placed"];
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
-pages.forEach(page => {
-  app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${page}.html`)));
-});
-
-/**
- * =========================================
  * AUTHENTICATION HELPERS
  * =========================================
  */
@@ -70,6 +59,17 @@ function auth(req, res, next) {
   } catch (err) {
     return res.status(401).json({ error: "Invalid or expired token" });
   }
+}
+
+// STRICT ADMIN MIDDLEWARE
+function adminAuth(req, res, next) {
+  auth(req, res, () => {
+    const isAuthorized = req.user.email === ADMIN_EMAIL || req.user.phone === ADMIN_PHONE;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Forbidden: Admin access only." });
+    }
+    next();
+  });
 }
 
 /**
@@ -119,16 +119,16 @@ function applyFinalPrice(originalRate, name) {
 
 /**
  * =========================================
- * API ENDPOINTS
+ * PUBLIC / USER API ENDPOINTS
  * =========================================
  */
 
-// REGISTER - Strictly Email, Password, Phone
+// REGISTER
 app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
     const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }, { username: username?.toLowerCase() }] });
-    if (exists) return res.status(400).json({ error: "Account already exists (Email/Phone/Username)" });
+    if (exists) return res.status(400).json({ error: "Account already exists" });
 
     const newUser = await User.create({
       username: username?.toLowerCase(),
@@ -139,11 +139,11 @@ app.post("/api/register", async (req, res) => {
       referredBy: referralCode || null,
       balance: 0
     });
-    res.json({ success: true, message: "Registration successful", referralCode: newUser.referralCode });
+    res.json({ success: true, message: "Registration successful" });
   } catch (err) { res.status(500).json({ error: "Registration failed" }); }
 });
 
-// LOGIN - Support for Email/Username (No Google)
+// LOGIN
 app.post("/api/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; 
@@ -154,15 +154,28 @@ app.post("/api/login", async (req, res) => {
     
     if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
-    const token = jwt.sign({ id: user._id, email: user.email, username: user.username }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign({ 
+        id: user._id, 
+        email: user.email, 
+        username: user.username,
+        phone: user.phone 
+    }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    
     res.json({ token, balance: user.balance });
   } catch (err) { res.status(500).json({ error: "Login failed" }); }
 });
 
-// GET SERVICES - Updated with forceRefresh logic and cleanServiceName integration
+// GET USER INFO
+app.get("/api/me", auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select("-password");
+        res.json(user);
+    } catch (err) { res.status(500).json({ error: "Error fetching profile" }); }
+});
+
+// GET SERVICES
 app.get("/api/services", async (req, res) => {
   try {
-    // Check if "refresh" is in the URL (e.g., /api/services?refresh=true)
     const forceRefresh = req.query.refresh === "true";
     let services = await Service.find();
     
@@ -172,7 +185,7 @@ app.get("/api/services", async (req, res) => {
       const list = Array.isArray(response.data) ? response.data : [];
 
       if (list.length > 0) {
-          await Service.deleteMany({}); // Clears the old services
+          await Service.deleteMany({});
           const mapped = list.map(s => ({
             serviceId: String(s.service),
             name: cleanServiceName(s.name),
@@ -210,7 +223,7 @@ app.post("/api/order", auth, async (req, res) => {
     const user = await User.findById(req.user.id);
     const totalCost = (applyFinalPrice(service.rate, service.name) / 1000) * Number(quantity);
 
-    if (user.balance < totalCost) return res.status(400).json({ error: `Insufficient balance. Need KES ${totalCost.toFixed(2)}` });
+    if (user.balance < totalCost) return res.status(400).json({ error: `Insufficient balance` });
 
     const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
     const providerRes = await axios.get(providerUrl);
@@ -218,6 +231,7 @@ app.post("/api/order", auth, async (req, res) => {
     if (providerRes.data && providerRes.data.order) {
         const order = await Order.create({
             userId: user._id, 
+            userEmail: user.email,
             serviceId, 
             serviceName: service.name, 
             orderId: String(providerRes.data.order), 
@@ -230,15 +244,12 @@ app.post("/api/order", auth, async (req, res) => {
 
         res.json({ success: true, orderId: order.orderId, newBalance: user.balance.toFixed(2) });
     } else { 
-        res.status(400).json({ error: providerRes.data.error || "Provider error. Check link/quantity." }); 
+        res.status(400).json({ error: "Provider error." }); 
     }
-  } catch (err) { 
-    log.error("Order Error: " + err.message);
-    res.status(500).json({ error: "Provider communication error." }); 
-  }
+  } catch (err) { res.status(500).json({ error: "Order failed." }); }
 });
 
-// SYNC HISTORY - Enhanced for Delixgains response format
+// SYNC HISTORY
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const activeOrders = await Order.find({ 
@@ -253,7 +264,7 @@ app.get("/api/sync-orders", auth, async (req, res) => {
         
         for (let orderId in response.data) {
             const data = response.data[orderId];
-            if (data && typeof data === 'object' && data.status) {
+            if (data?.status) {
                 await Order.findOneAndUpdate({ orderId }, { status: data.status.toLowerCase() });
             }
         }
@@ -272,12 +283,76 @@ app.post("/api/deposit", auth, async (req, res) => {
 
     await Deposit.create({
       userId: req.user.id, 
+      userEmail: req.user.email,
+      phone: req.user.phone,
       amount: Number(amount),
       transactionCode: transactionCode.toUpperCase(), 
       status: "pending"
     });
-    res.json({ success: true, message: "Deposit verification pending." });
+    res.json({ success: true, message: "Verification pending" });
   } catch (error) { res.status(500).json({ error: "Submission failed" }); }
+});
+
+/**
+ * =========================================
+ * ADMIN ONLY API ENDPOINTS
+ * =========================================
+ */
+
+// GET ALL USERS
+app.get("/api/admin/users", adminAuth, async (req, res) => {
+    const users = await User.find().select("-password");
+    res.json(users);
+});
+
+// GET ALL DEPOSITS
+app.get("/api/admin/deposits", adminAuth, async (req, res) => {
+    const deposits = await Deposit.find().sort({ createdAt: -1 });
+    res.json(deposits);
+});
+
+// GET ALL ORDERS
+app.get("/api/admin/orders", adminAuth, async (req, res) => {
+    const orders = await Order.find().sort({ createdAt: -1 });
+    res.json(orders);
+});
+
+// APPROVE DEPOSIT
+app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
+    try {
+        const { depositId } = req.body;
+        const dep = await Deposit.findById(depositId);
+        if (!dep || dep.status !== "pending") return res.status(400).json({ error: "Invalid deposit" });
+
+        const user = await User.findById(dep.userId);
+        user.balance += dep.amount;
+        dep.status = "completed";
+
+        await user.save();
+        await dep.save();
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: "Approval failed" }); }
+});
+
+// MANUAL BALANCE ADJUST
+app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
+    try {
+        const { userId, amount } = req.body;
+        const user = await User.findById(userId);
+        user.balance += Number(amount);
+        await user.save();
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: "Update failed" }); }
+});
+
+/**
+ * =========================================
+ * SERVER BOOT
+ * =========================================
+ */
+const pagesList = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "admin"];
+pagesList.forEach(page => {
+  app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${page}.html`)));
 });
 
 const PORT = process.env.PORT || 3000;
