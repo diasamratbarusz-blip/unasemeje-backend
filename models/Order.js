@@ -79,7 +79,7 @@ const OrderSchema = new mongoose.Schema(
 
     provider: {
       type: String,
-      default: "DELIXGAINS",
+      default: "DELIXGAINS", // Synced with your current provider
       uppercase: true,
       index: true
     },
