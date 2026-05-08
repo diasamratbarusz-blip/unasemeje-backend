@@ -37,7 +37,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public"))); 
 
-// STRICT OWNER CREDENTIALS
+// STRICT OWNER CREDENTIALS (Matches auth.js and dashboard.js)
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
 const ADMIN_PHONE = "0715509440";
 
@@ -65,6 +65,7 @@ function auth(req, res, next) {
 // STRICT ADMIN MIDDLEWARE: Checks for specific owner email/phone
 function adminAuth(req, res, next) {
   auth(req, res, () => {
+    // Verifies against the hardcoded owner credentials
     const isAuthorized = req.user.email === ADMIN_EMAIL || req.user.phone === ADMIN_PHONE;
     if (!isAuthorized) {
       return res.status(403).json({ error: "Forbidden: Admin access only." });
@@ -128,18 +129,28 @@ function applyFinalPrice(originalRate, name) {
 app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
-    const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }, { username: username?.toLowerCase() }] });
-    if (exists) return res.status(400).json({ error: "Account already exists" });
+    
+    // Check if user already exists via any identifier
+    const exists = await User.findOne({ 
+        $or: [
+            { email: email?.toLowerCase() }, 
+            { phone }, 
+            { username: username?.toLowerCase() }
+        ] 
+    });
+    
+    if (exists) return res.status(400).json({ error: "Account with this email, phone, or username already exists" });
 
     const newUser = await User.create({
       username: username?.toLowerCase(),
       email: email?.toLowerCase(), 
-      password, 
+      password, // Note: In production, hash this password
       phone,
       referralCode: generateReferralCode(),
       referredBy: referralCode || null,
       balance: 0
     });
+    
     res.json({ success: true, message: "Registration successful" });
   } catch (err) { res.status(500).json({ error: "Registration failed" }); }
 });
@@ -149,7 +160,11 @@ app.post("/api/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; 
     const user = await User.findOne({ 
-      $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }], 
+      $or: [
+          { email: identifier?.toLowerCase() }, 
+          { username: identifier?.toLowerCase() },
+          { phone: identifier }
+      ], 
       password 
     });
     
@@ -174,7 +189,7 @@ app.get("/api/me", auth, async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Error fetching profile" }); }
 });
 
-// GET SERVICES
+// GET SERVICES (With Auto-Markup)
 app.get("/api/services", async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === "true";
@@ -208,6 +223,7 @@ app.get("/api/services", async (req, res) => {
       const c = s.category;
       if (!grouped[p]) grouped[p] = {};
       if (!grouped[p][c]) grouped[p][c] = [];
+      // Apply unasemeje markup logic here
       grouped[p][c].push({ ...s.toObject(), rate: applyFinalPrice(s.rate, s.name) });
     });
     res.json({ success: true, data: grouped });
@@ -226,6 +242,7 @@ app.post("/api/order", auth, async (req, res) => {
 
     if (user.balance < totalCost) return res.status(400).json({ error: `Insufficient balance` });
 
+    // Send to Delixgains Provider
     const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
     const providerRes = await axios.get(providerUrl);
     
@@ -245,12 +262,12 @@ app.post("/api/order", auth, async (req, res) => {
 
         res.json({ success: true, orderId: order.orderId, newBalance: user.balance.toFixed(2) });
     } else { 
-        res.status(400).json({ error: "Provider error." }); 
+        res.status(400).json({ error: providerRes.data.error || "Provider error." }); 
     }
-  } catch (err) { res.status(500).json({ error: "Order failed." }); }
+  } catch (err) { res.status(500).json({ error: "Order process failed." }); }
 });
 
-// SYNC HISTORY
+// SYNC ORDER STATUS
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const activeOrders = await Order.find({ 
@@ -272,15 +289,15 @@ app.get("/api/sync-orders", auth, async (req, res) => {
     }
     const updated = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
     res.json(updated);
-  } catch (err) { res.status(500).json({ error: "Failed to sync orders" }); }
+  } catch (err) { res.status(500).json({ error: "Failed to sync order history" }); }
 });
 
-// DEPOSIT
+// SUBMIT DEPOSIT (Manual M-Pesa Verification)
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { amount, transactionCode } = req.body;
     const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "Code already submitted" });
+    if (exists) return res.status(400).json({ error: "This transaction code has already been submitted" });
 
     await Deposit.create({
       userId: req.user.id, 
@@ -290,7 +307,7 @@ app.post("/api/deposit", auth, async (req, res) => {
       transactionCode: transactionCode.toUpperCase(), 
       status: "pending"
     });
-    res.json({ success: true, message: "Verification pending" });
+    res.json({ success: true, message: "Deposit submitted. Verification pending." });
   } catch (error) { res.status(500).json({ error: "Submission failed" }); }
 });
 
@@ -300,61 +317,67 @@ app.post("/api/deposit", auth, async (req, res) => {
  * =========================================
  */
 
-// GET ALL USERS
+// VIEW ALL DATA
 app.get("/api/admin/users", adminAuth, async (req, res) => {
-    const users = await User.find().select("-password");
+    const users = await User.find().select("-password").sort({ createdAt: -1 });
     res.json(users);
 });
 
-// GET ALL DEPOSITS
 app.get("/api/admin/deposits", adminAuth, async (req, res) => {
     const deposits = await Deposit.find().sort({ createdAt: -1 });
     res.json(deposits);
 });
 
-// GET ALL ORDERS
 app.get("/api/admin/orders", adminAuth, async (req, res) => {
     const orders = await Order.find().sort({ createdAt: -1 });
     res.json(orders);
 });
 
-// APPROVE DEPOSIT
+// APPROVE M-PESA DEPOSIT
 app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
     try {
         const { depositId } = req.body;
         const dep = await Deposit.findById(depositId);
-        if (!dep || dep.status !== "pending") return res.status(400).json({ error: "Invalid deposit" });
+        if (!dep || dep.status !== "pending") return res.status(400).json({ error: "Invalid or already processed deposit" });
 
         const user = await User.findById(dep.userId);
-        user.balance += dep.amount;
-        dep.status = "completed";
-
-        await user.save();
-        await dep.save();
-        res.json({ success: true });
+        if (user) {
+            user.balance += dep.amount;
+            dep.status = "completed";
+            await user.save();
+            await dep.save();
+            res.json({ success: true, message: `Approved KES ${dep.amount} for ${user.email}` });
+        } else {
+            res.status(404).json({ error: "User not found" });
+        }
     } catch (err) { res.status(500).json({ error: "Approval failed" }); }
 });
 
-// MANUAL BALANCE ADJUST
+// MANUAL BALANCE ADJUSTMENT
 app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
     try {
         const { userId, amount } = req.body;
         const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ error: "User not found" });
+        
         user.balance += Number(amount);
         await user.save();
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: "Update failed" }); }
+        res.json({ success: true, newBalance: user.balance });
+    } catch (err) { res.status(500).json({ error: "Balance update failed" }); }
 });
 
 /**
  * =========================================
- * SERVER BOOT
+ * SERVER ROUTING & BOOT
  * =========================================
  */
-const pagesList = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "admin", "dashboard"];
-pagesList.forEach(page => {
+const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "admin", "dashboard"];
+pages.forEach(page => {
   app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${page}.html`)));
 });
+
+// Root Redirect
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA - Online on port ${PORT}`));
