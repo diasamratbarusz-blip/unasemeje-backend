@@ -28,7 +28,7 @@ const app = express();
  * MIDDLEWARE & CONFIG
  * =========================================
  */
-// ✅ UPDATED CORS: Explicitly allows your Vercel frontend and local testing
+// ✅ UPDATED CORS: Explicitly allows your Vercel frontend and local testing environment
 app.use(cors({
   origin: ["https://unasemeje-frontend.vercel.app", "http://localhost:3000", "http://localhost:5000"],
   methods: ["GET", "POST", "PUT", "DELETE"],
@@ -126,7 +126,7 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 
-// REGISTER - Email, Password, and Phone focus
+// REGISTER - Only email, password, and phone as requested
 app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
@@ -253,10 +253,12 @@ app.post("/api/order", auth, async (req, res) => {
         res.json({ 
             success: true, 
             orderId: order.orderId, 
-            newBalance: user.balance.toFixed(2)
+            newBalance: user.balance.toFixed(2),
+            serviceName: service.name,
+            totalCost: totalCost.toFixed(2)
         });
     } else { 
-        // Forward the specific error from the provider (e.g., "Not enough funds on main API")
+        // Forward the specific error from the provider
         const apiError = providerRes.data.error || "Provider rejected the request";
         res.status(400).json({ error: apiError }); 
     }
