@@ -1,9 +1,9 @@
 const mongoose = require("mongoose");
 
 /**
- * =========================
+ * =========================================
  * DATABASE CONFIGURATION (UNASEMEJE ø DIA)
- * =========================
+ * =========================================
  * This handles the connection to MongoDB.
  * It includes a retry mechanism to ensure the SMM panel 
  * stays online even if the database temporarily fluctuates.
@@ -24,7 +24,7 @@ const connectDB = async () => {
 
     /**
      * RETRY LOGIC:
-     * This is critical for production on Render/Vercel.
+     * This is critical for production on Render.
      * If the DB is not ready, it waits 5 seconds and tries again 
      * instead of letting the whole server crash.
      */
