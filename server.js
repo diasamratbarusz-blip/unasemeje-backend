@@ -28,7 +28,6 @@ const app = express();
  * MIDDLEWARE & CONFIG
  * =========================================
  */
-// ✅ UPDATED CORS: Explicitly allows your Vercel frontend and local testing environment
 app.use(cors({
   origin: ["https://unasemeje-frontend.vercel.app", "http://localhost:3000", "http://localhost:5000"],
   methods: ["GET", "POST", "PUT", "DELETE"],
@@ -36,7 +35,6 @@ app.use(cors({
 }));
 
 app.use(express.json());
-// Serve all files from the 'public' folder
 app.use(express.static(path.join(__dirname, "public"))); 
 
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
@@ -48,7 +46,7 @@ log("UNASEMEJE ø DIA - Server starting...");
 
 /**
  * =========================================
- * PAGE ROUTES (Multi-Page Navigation)
+ * PAGE ROUTES
  * =========================================
  */
 const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "order-placed"];
@@ -87,7 +85,7 @@ async function giveReferralBonus(userId, orderCost) {
     if (!user || !user.referredBy) return;
     const referrer = await User.findOne({ referralCode: user.referredBy });
     if (!referrer) return;
-    const bonus = orderCost * 0.10; // ✅ 10% Bonus for Referrals
+    const bonus = orderCost * 0.10; // ✅ 10% Referral Bonus
     referrer.balance += bonus;
     referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
     await referrer.save();
@@ -110,10 +108,9 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ✅ PROFIT MARGIN LOGIC - SPECIFIC TO UNASEMEJE ø DIA
 function applyFinalPrice(originalRate, name) {
   const t = String(name).toLowerCase();
-  let markup = 40; // Default flat markup in KES
+  let markup = 40; 
   if (t.includes("like")) markup = 30;
   if (t.includes("follower")) markup = 25;
   if (t.includes("view")) markup = 35;
@@ -126,7 +123,7 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 
-// REGISTER - Only email, password, and phone as requested
+// REGISTER - Strictly Email, Password, Phone
 app.post("/api/register", async (req, res) => {
   try {
     const { username, email, password, phone, referralCode } = req.body;
@@ -146,44 +143,32 @@ app.post("/api/register", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Registration failed" }); }
 });
 
-// LOGIN - Support for Email or Username + Phone (No Google OAuth)
+// LOGIN - Support for Email/Username (No Google)
 app.post("/api/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; 
     const user = await User.findOne({ 
-      $or: [
-        { email: identifier?.toLowerCase() }, 
-        { username: identifier?.toLowerCase() }
-      ], 
+      $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }], 
       password 
     });
     
-    if (!user) return res.status(400).json({ error: "Invalid username/email or password" });
+    if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
     const token = jwt.sign({ id: user._id, email: user.email, username: user.username }, process.env.JWT_SECRET, { expiresIn: "7d" });
     res.json({ token, balance: user.balance });
   } catch (err) { res.status(500).json({ error: "Login failed" }); }
 });
 
-// GET PROFILE
-app.get("/api/me", auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id).select("-password");
-    res.json(user);
-  } catch (err) { res.status(500).json({ error: "Failed to fetch profile" }); }
-});
-
-// GET SERVICES - Automated sync with Delixgains
+// GET SERVICES - Sync with Delixgains
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
-    
     if (!services.length) {
-      const url1 = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
-      const response1 = await axios.get(url1);
-      const list1 = Array.isArray(response1.data) ? response1.data : [];
+      const url = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
+      const response = await axios.get(url);
+      const list = Array.isArray(response.data) ? response.data : [];
 
-      const p1Mapped = list1.map(s => ({
+      const mapped = list.map(s => ({
         serviceId: String(s.service),
         name: cleanServiceName(s.name),
         rate: Number(s.rate || 0),
@@ -191,12 +176,12 @@ app.get("/api/services", async (req, res) => {
         max: Number(s.max || 10000),
         category: s.category || "General",
         platform: detectPlatform(s),
-        provider: "PROVIDER1"
+        provider: "DELIXGAINS"
       }));
 
-      if (p1Mapped.length > 0) {
+      if (mapped.length > 0) {
           await Service.deleteMany({});
-          await Service.insertMany(p1Mapped);
+          await Service.insertMany(mapped);
           services = await Service.find();
       }
     }
@@ -213,95 +198,75 @@ app.get("/api/services", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to load services" }); }
 });
 
-// PLACE ORDER - Fixes for communication errors shown in image_4.png
+// PLACE ORDER
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
-    
     const service = await Service.findOne({ serviceId });
-    if (!service) return res.status(404).json({ error: "Service no longer available" });
+    if (!service) return res.status(404).json({ error: "Service unavailable" });
 
     const user = await User.findById(req.user.id);
-    const finalRate = applyFinalPrice(service.rate, service.name);
-    const totalCost = (finalRate / 1000) * Number(quantity);
+    const totalCost = (applyFinalPrice(service.rate, service.name) / 1000) * Number(quantity);
 
-    if (user.balance < totalCost) {
-        return res.status(400).json({ error: `Insufficient balance. You need KES ${totalCost.toFixed(2)}` });
-    }
+    if (user.balance < totalCost) return res.status(400).json({ error: `Insufficient balance. Need KES ${totalCost.toFixed(2)}` });
 
-    // Call Provider API (Delixgains)
     const providerUrl = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`;
-    
     const providerRes = await axios.get(providerUrl);
     
-    // Check for explicit 'order' field in response from Delixgains
     if (providerRes.data && providerRes.data.order) {
         const order = await Order.create({
             userId: user._id, 
             serviceId, 
             serviceName: service.name, 
             orderId: String(providerRes.data.order), 
-            link, 
-            quantity, 
-            cost: totalCost, 
-            status: "pending"
+            link, quantity, cost: totalCost, status: "pending"
         });
 
         user.balance -= totalCost;
         await user.save();
         await giveReferralBonus(user._id, totalCost);
 
-        res.json({ 
-            success: true, 
-            orderId: order.orderId, 
-            newBalance: user.balance.toFixed(2),
-            serviceName: service.name,
-            totalCost: totalCost.toFixed(2)
-        });
+        res.json({ success: true, orderId: order.orderId, newBalance: user.balance.toFixed(2) });
     } else { 
-        // Handle provider-side errors (e.g., 'not enough balance', 'invalid link')
-        const apiError = providerRes.data.error || "Provider rejected the request. Check your link and balance.";
-        res.status(400).json({ error: apiError }); 
+        res.status(400).json({ error: providerRes.data.error || "Provider error. Check link/quantity." }); 
     }
   } catch (err) { 
-    // This handles the network/timeout error seen in image_4.png
-    log("CRITICAL ORDER ERROR: " + err.message);
-    res.status(500).json({ error: "Server encountered an error communicating with the provider." }); 
+    log.error("Order Error: " + err.message);
+    res.status(500).json({ error: "Provider communication error." }); 
   }
 });
 
-// SYNC HISTORY - Updates order status (pending/completed/canceled)
+// SYNC HISTORY - Enhanced for Delixgains response format
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
-    const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    const activeIds = dbOrders
-        .filter(o => !["completed", "canceled", "partial"].includes(o.status))
-        .map(o => o.orderId);
+    const activeOrders = await Order.find({ 
+      userId: req.user.id, 
+      status: { $nin: ["completed", "canceled", "partial"] } 
+    });
 
-    if (activeIds.length > 0) {
-        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&orders=${activeIds.join(",")}`;
+    if (activeOrders.length > 0) {
+        const ids = activeOrders.map(o => o.orderId).join(",");
+        const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&orders=${ids}`;
         const response = await axios.get(url);
         
         for (let orderId in response.data) {
-            const update = response.data[orderId];
-            if (update && update.status) {
-                await Order.findOneAndUpdate({ orderId }, { status: update.status.toLowerCase() });
+            const data = response.data[orderId];
+            if (data && typeof data === 'object' && data.status) {
+                await Order.findOneAndUpdate({ orderId }, { status: data.status.toLowerCase() });
             }
         }
     }
-    const updatedOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    res.json(updatedOrders);
-  } catch (err) { res.status(500).json({ error: "Failed to sync order history" }); }
+    const updated = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
+    res.json(updated);
+  } catch (err) { res.status(500).json({ error: "Failed to sync orders" }); }
 });
 
-// DEPOSIT - Manual M-Pesa tracking for UNASEMEJE ø DIA
+// DEPOSIT
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { amount, transactionCode } = req.body;
-    if (!amount || !transactionCode) return res.status(400).json({ error: "Please provide amount and transaction code" });
-
     const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "This transaction code has already been submitted" });
+    if (exists) return res.status(400).json({ error: "Code already submitted" });
 
     await Deposit.create({
       userId: req.user.id, 
@@ -309,8 +274,8 @@ app.post("/api/deposit", auth, async (req, res) => {
       transactionCode: transactionCode.toUpperCase(), 
       status: "pending"
     });
-    res.json({ success: true, message: "Receipt received. We are verifying your M-Pesa deposit." });
-  } catch (error) { res.status(500).json({ error: "Deposit submission failed" }); }
+    res.json({ success: true, message: "Deposit verification pending." });
+  } catch (error) { res.status(500).json({ error: "Submission failed" }); }
 });
 
 const PORT = process.env.PORT || 3000;
