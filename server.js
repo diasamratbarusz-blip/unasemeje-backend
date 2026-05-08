@@ -110,7 +110,7 @@ function detectPlatform(service = {}) {
   return "Other";
 }
 
-// ✅ PROFIT MARGIN LOGIC
+// ✅ PROFIT MARGIN LOGIC - SPECIFIC TO UNASEMEJE ø DIA
 function applyFinalPrice(originalRate, name) {
   const t = String(name).toLowerCase();
   let markup = 40; // Default flat markup in KES
@@ -146,7 +146,7 @@ app.post("/api/register", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Registration failed" }); }
 });
 
-// LOGIN
+// LOGIN - Support for Email or Username + Phone (No Google OAuth)
 app.post("/api/login", async (req, res) => {
   try {
     const { identifier, password } = req.body; 
@@ -173,7 +173,7 @@ app.get("/api/me", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to fetch profile" }); }
 });
 
-// GET SERVICES
+// GET SERVICES - Automated sync with Delixgains
 app.get("/api/services", async (req, res) => {
   try {
     let services = await Service.find();
@@ -213,7 +213,7 @@ app.get("/api/services", async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to load services" }); }
 });
 
-// PLACE ORDER - Improved Error Catching
+// PLACE ORDER - Fixes for communication errors shown in image_4.png
 app.post("/api/order", auth, async (req, res) => {
   try {
     const { serviceId, link, quantity } = req.body;
@@ -234,6 +234,7 @@ app.post("/api/order", auth, async (req, res) => {
     
     const providerRes = await axios.get(providerUrl);
     
+    // Check for explicit 'order' field in response from Delixgains
     if (providerRes.data && providerRes.data.order) {
         const order = await Order.create({
             userId: user._id, 
@@ -258,17 +259,18 @@ app.post("/api/order", auth, async (req, res) => {
             totalCost: totalCost.toFixed(2)
         });
     } else { 
-        // Forward the specific error from the provider
-        const apiError = providerRes.data.error || "Provider rejected the request";
+        // Handle provider-side errors (e.g., 'not enough balance', 'invalid link')
+        const apiError = providerRes.data.error || "Provider rejected the request. Check your link and balance.";
         res.status(400).json({ error: apiError }); 
     }
   } catch (err) { 
+    // This handles the network/timeout error seen in image_4.png
     log("CRITICAL ORDER ERROR: " + err.message);
     res.status(500).json({ error: "Server encountered an error communicating with the provider." }); 
   }
 });
 
-// SYNC HISTORY
+// SYNC HISTORY - Updates order status (pending/completed/canceled)
 app.get("/api/sync-orders", auth, async (req, res) => {
   try {
     const dbOrders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
@@ -292,7 +294,7 @@ app.get("/api/sync-orders", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Failed to sync order history" }); }
 });
 
-// DEPOSIT
+// DEPOSIT - Manual M-Pesa tracking for UNASEMEJE ø DIA
 app.post("/api/deposit", auth, async (req, res) => {
   try {
     const { amount, transactionCode } = req.body;
