@@ -1,6 +1,7 @@
 const axios = require("axios");
 
 // ================= CONFIG PROVIDER 1 =================
+// Defaulting to Delixgains as your primary service provider
 const API_URL_1 = process.env.SMM_API_URL || "https://delixgainske.com/api/v2";
 const API_KEY_1 = process.env.SMM_API_KEY;
 
@@ -9,6 +10,7 @@ const API_URL_2 = process.env.API_URL_PROVIDER2 || "https://smm.africa/api/v3";
 const API_KEY_2 = process.env.API_KEY_PROVIDER2;
 
 // ================= VALIDATION =================
+// Critical for production stability
 if (!API_KEY_1) console.error("❌ SMM_API_KEY (Provider 1) missing");
 if (!API_KEY_2) console.error("❌ API_KEY_PROVIDER2 (Provider 2) missing");
 
@@ -16,6 +18,10 @@ if (!API_KEY_2) console.error("❌ API_KEY_PROVIDER2 (Provider 2) missing");
 const DEBUG = true;
 
 // ================= SAFE NORMALIZER =================
+/**
+ * Ensures the data returned from various API formats is 
+ * converted into a standard array format for processing.
+ */
 function normalizeResponse(data) {
   if (!data) return [];
   if (Array.isArray(data)) return data;
@@ -27,8 +33,8 @@ function normalizeResponse(data) {
 
 // ================= CORE REQUEST =================
 /**
- * Modified to support both Providers
- * providerNum: 1 or 2
+ * Core communication engine supporting both GET (Delixgains) 
+ * and POST (SMM Africa) methods.
  */
 async function request(params, providerNum = 1) {
   const url = providerNum === 2 ? API_URL_2 : API_URL_1;
@@ -52,7 +58,7 @@ async function request(params, providerNum = 1) {
         headers: { "Content-Type": "application/json" }
       });
     } else {
-      // Provider 1 uses the original GET method
+      // Provider 1 (Delixgains) uses the original GET method
       res = await axios.get(url, {
         params: {
           key: key,
@@ -77,6 +83,9 @@ async function request(params, providerNum = 1) {
 }
 
 // ================= SERVICES =================
+/**
+ * Fetches and maps services into a unified format for the database.
+ */
 async function getServices(providerNum = 1) {
   const data = await request({ action: "services" }, providerNum);
   const services = normalizeResponse(data);
@@ -98,6 +107,9 @@ async function getServices(providerNum = 1) {
 }
 
 // ================= CREATE ORDER =================
+/**
+ * Submits new orders to the selected provider.
+ */
 async function createOrder(service, link, quantity, providerNum = 1) {
   if (!service || !link || !quantity) {
     console.error("❌ Missing order params");
@@ -126,6 +138,9 @@ async function getStatus(order, providerNum = 1) {
 }
 
 // ================= MULTIPLE STATUS =================
+/**
+ * Efficiently checks multiple order statuses in a single call.
+ */
 async function getMultipleStatus(orders, providerNum = 1) {
   return await request({
     action: "status",
@@ -155,6 +170,9 @@ async function cancel(order, providerNum = 1) {
 }
 
 // ================= HEALTH CHECK =================
+/**
+ * Simple check to verify provider credentials are active.
+ */
 async function testConnection(providerNum = 1) {
   const res = await request({ action: "balance" }, providerNum);
   return !!res;
