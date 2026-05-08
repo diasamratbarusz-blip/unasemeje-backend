@@ -5,14 +5,10 @@ const crypto = require("crypto");
  * =========================================
  * USER SCHEMA (unasemeje ø dia SMM PANEL)
  * =========================================
- * Handles:
- * - Authentication (Username, Email, Phone)
- * - Balance system (KES/USD compatible)
- * - Admin role & Security status
- * - API key system for resellers
- * - Referral system (Hex-based tracking)
+ * Updated for high-security admin verification.
  */
 
+// Function to generate a unique 8-character referral code
 function generateReferralCode() {
   return crypto.randomBytes(4).toString("hex");
 }
@@ -22,8 +18,7 @@ const UserSchema = new mongoose.Schema(
     /* ================= AUTHENTICATION INFO ================= */
     
     /** 
-     * NEW: Username support for 'unasemeje ø dia' branding. 
-     * 'sparse: true' ensures compatibility with legacy records if necessary.
+     * Username support for branding and unique identification.
      */
     username: {
       type: String,
@@ -34,6 +29,10 @@ const UserSchema = new mongoose.Schema(
       index: true
     },
 
+    /**
+     * Email is the primary identifier. 
+     * ADMIN: diasamratbarusz@gmail.com
+     */
     email: {
       type: String,
       required: [true, "Email is required"],
@@ -49,8 +48,8 @@ const UserSchema = new mongoose.Schema(
     },
 
     /** 
-     * Phone is required for M-Pesa STK Push integrations 
-     * common in the Kenyan regional market.
+     * Phone required for M-Pesa STK Push. 
+     * ADMIN: 0715509440
      */
     phone: {
       type: String,
@@ -68,6 +67,10 @@ const UserSchema = new mongoose.Schema(
     },
 
     /* ================= ROLE & SECURITY ================= */
+    /**
+     * Role determines frontend and backend access.
+     * The value 'admin' enables the visible controls in the app.
+     */
     role: {
       type: String,
       enum: ["user", "admin"],
@@ -97,8 +100,6 @@ const UserSchema = new mongoose.Schema(
     },
 
     /* ================= REFERRAL SYSTEM ================= */
-
-    // Unique hex code assigned to each user upon creation
     referralCode: {
       type: String,
       unique: true,
@@ -106,13 +107,11 @@ const UserSchema = new mongoose.Schema(
       index: true
     },
 
-    // Stores the referral code of the inviter
     referredBy: {
       type: String,
       default: null
     },
 
-    // Total accumulated commission from referrals
     referralEarnings: {
       type: Number,
       default: 0
@@ -130,31 +129,36 @@ const UserSchema = new mongoose.Schema(
     }
   },
   {
-    // Automatically creates 'createdAt' and 'updatedAt' fields
     timestamps: true
   }
 );
 
 /* ================= DATABASE INDEXING ================= */
-/**
- * Optimized for high-speed lookups during login (identifier check) 
- * and referral tracking.
- */
 UserSchema.index({ username: 1 });
 UserSchema.index({ email: 1 });
 UserSchema.index({ phone: 1 });
 UserSchema.index({ role: 1 });
 UserSchema.index({ referralCode: 1 });
 
+/* ================= MIDDLEWARE ================= */
 /**
- * Pre-save middleware to handle any final data cleanup
- * before it hits the database.
+ * Pre-save logic to ensure phone numbers are clean for M-Pesa 
+ * and specific accounts are assigned admin roles.
  */
 UserSchema.pre("save", function (next) {
-  // Ensure the phone number is clean (no spaces)
+  // Clean phone number formatting
   if (this.phone) {
     this.phone = this.phone.replace(/\s+/g, '');
   }
+
+  // Automatic Admin Assignment based on your credentials
+  const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
+  const ADMIN_PHONE = "0715509440";
+
+  if (this.email === ADMIN_EMAIL || this.phone === ADMIN_PHONE) {
+    this.role = "admin";
+  }
+
   next();
 });
 
