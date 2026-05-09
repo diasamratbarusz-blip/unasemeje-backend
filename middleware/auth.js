@@ -39,6 +39,11 @@ module.exports = function auth(req, res, next) {
       return res.status(500).json({ error: "Internal server authentication error" });
     }
 
+    /**
+     * VERIFICATION LOGIC
+     * Decodes the token to reveal the user's identity.
+     * The payload MUST include email and phone for the admin panel security to work.
+     */
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     if (!decoded) {
@@ -50,21 +55,27 @@ module.exports = function auth(req, res, next) {
 
     // ================= ATTACH USER =================
     /** 
-     * The decoded payload usually contains:
-     * { id: user._id, email: user.email, phone: user.phone }
-     * This allows subsequent routes (like /api/order) to know who is acting.
+     * The decoded payload contains:
+     * { id: user._id, email: user.email, phone: user.phone, role: user.role }
+     * This is critical for the Identity Guard in Admin routes.
      */
     req.user = decoded;
 
     next();
 
   } catch (err) {
-    // This catches expired tokens or tampered tokens
-    console.error("AUTH ERROR:", err.message);
+    // Catching specifically for expired tokens to give a clear message
+    if (err.name === "TokenExpiredError") {
+        return res.status(401).json({
+            success: false,
+            error: "Your session has expired. Please log in again."
+        });
+    }
 
+    console.error("AUTH ERROR:", err.message);
     return res.status(401).json({
       success: false,
-      error: "Session expired or invalid token. Please login again."
+      error: "Session invalid. Please login again."
     });
   }
 };
