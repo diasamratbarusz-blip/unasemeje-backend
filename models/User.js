@@ -30,8 +30,8 @@ const UserSchema = new mongoose.Schema(
     },
 
     /**
-     * Email is the primary identifier. 
-     * ADMIN: diasamratbarusz@gmail.com
+     * Email is the primary identifier.
+     * STATED OWNER: diasamratbarusz@gmail.com
      */
     email: {
       type: String,
@@ -48,8 +48,8 @@ const UserSchema = new mongoose.Schema(
     },
 
     /** 
-     * Phone required for M-Pesa STK Push. 
-     * ADMIN: 0715509440
+     * Phone required for Kenyan mobile payment triggers (M-Pesa).
+     * STATED OWNER: 0715509440
      */
     phone: {
       type: String,
@@ -68,8 +68,7 @@ const UserSchema = new mongoose.Schema(
 
     /* ================= ROLE & SECURITY ================= */
     /**
-     * Role determines frontend and backend access.
-     * The value 'admin' enables the visible controls in the app.
+     * Role determines backend route access via identity guard.
      */
     role: {
       type: String,
@@ -100,6 +99,9 @@ const UserSchema = new mongoose.Schema(
     },
 
     /* ================= REFERRAL SYSTEM ================= */
+    /**
+     * 10% Referral bonus system implementation.
+     */
     referralCode: {
       type: String,
       unique: true,
@@ -142,16 +144,16 @@ UserSchema.index({ referralCode: 1 });
 
 /* ================= MIDDLEWARE ================= */
 /**
- * Pre-save logic to ensure phone numbers are clean for M-Pesa 
- * and specific accounts are assigned admin roles.
+ * Pre-save logic to ensure phone numbers are clean for payment processing
+ * and your specific credentials are automatically granted Admin status.
  */
 UserSchema.pre("save", function (next) {
-  // Clean phone number formatting
+  // Clean phone number formatting by removing spaces
   if (this.phone) {
     this.phone = this.phone.replace(/\s+/g, '');
   }
 
-  // Automatic Admin Assignment based on your credentials
+  // FORCE ADMIN LOCK: Automatically assigns 'admin' role to your credentials
   const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
   const ADMIN_PHONE = "0715509440";
 
