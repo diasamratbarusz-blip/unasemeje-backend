@@ -37,8 +37,13 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public"))); 
 
-// STRICT OWNER CREDENTIALS
-const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
+/**
+ * =========================================
+ * STRICT OWNER CREDENTIALS
+ * Locked to your verified identity.
+ * =========================================
+ */
+const ADMIN_EMAIL = "diasamratbarusz@gmail.com".toLowerCase();
 const ADMIN_PHONE = "0715509440";
 
 // Connect to MongoDB
@@ -62,12 +67,20 @@ function auth(req, res, next) {
   }
 }
 
-// STRICT ADMIN MIDDLEWARE: Checks for specific owner email/phone
+/**
+ * STRICT ADMIN MIDDLEWARE
+ * This is the final gatekeeper. It checks your unique email and phone
+ * from the database-verified token.
+ */
 function adminAuth(req, res, next) {
   auth(req, res, () => {
-    const isAuthorized = req.user.email === ADMIN_EMAIL || req.user.phone === ADMIN_PHONE;
+    // We convert everything to lowercase to prevent bypass via uppercase typing.
+    const userEmail = req.user.email ? req.user.email.toLowerCase() : "";
+    const isAuthorized = userEmail === ADMIN_EMAIL && req.user.phone === ADMIN_PHONE;
+    
     if (!isAuthorized) {
-      return res.status(403).json({ error: "Forbidden: Admin access only." });
+      log(`UNAUTHORIZED ACCESS ATTEMPT by: ${userEmail}`);
+      return res.status(403).json({ error: "Forbidden: Owner access only." });
     }
     next();
   });
@@ -131,7 +144,7 @@ app.post("/api/register", async (req, res) => {
     const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }, { username: username?.toLowerCase() }] });
     if (exists) return res.status(400).json({ error: "Account already exists" });
 
-    const newUser = await User.create({
+    await User.create({
       username: username?.toLowerCase(),
       email: email?.toLowerCase(), 
       password, 
@@ -297,6 +310,7 @@ app.post("/api/deposit", auth, async (req, res) => {
 /**
  * =========================================
  * ADMIN ONLY API ENDPOINTS
+ * Protected by adminAuth identity verification.
  * =========================================
  */
 
@@ -351,10 +365,13 @@ app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
  * SERVER BOOT
  * =========================================
  */
-const pagesList = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "admin", "dashboard"];
+const pagesList = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "dashboard"];
 pagesList.forEach(page => {
   app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${page}.html`)));
 });
+
+// Special static serve for admin to prevent easy discovery
+app.get("/admin", adminAuth, (req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA - Online on port ${PORT}`));
