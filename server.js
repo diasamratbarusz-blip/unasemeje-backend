@@ -17,21 +17,26 @@ const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
-// ================= PAYNECTA VERIFICATION =================
+// ================= CONFIGURATION & CONSTANTS =================
+const ADMIN_EMAIL = "diasamratb@gmail.com".toLowerCase();
+const ADMIN_PHONE = "0715509440";
+const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
+
+// ================= PAYNECTA UTILS =================
 /**
- * Verifies the Paynecta API Key and User status
+ * Verifies the Paynecta API Key and User status on boot
  */
 async function verifyPaynecta() {
     try {
-        const response = await axios.get("https://paynecta.co.ke/api/v1/auth/verify", {
+        const response = await axios.get(`${PAYNECTA_BASE_URL}/auth/verify`, {
             headers: {
                 "X-API-Key": process.env.PAYNECTA_API_KEY || "your_api_key_here",
-                "X-User-Email": "diasamratb@gmail.com" // Tied to your admin email
+                "X-User-Email": ADMIN_EMAIL
             }
         });
 
         if (response.data.success) {
-            console.log("Paynecta Status:", "✅ Verified -", response.data.data.kyc.first_name, response.data.data.api_access);
+            console.log("Paynecta Status:", "✅ Verified -", response.data.data.kyc.first_name, "| Access:", response.data.data.api_access);
         } else {
             console.log("Paynecta Status:", "❌", response.data.message);
         }
@@ -44,7 +49,7 @@ async function verifyPaynecta() {
 // Log API status on boot
 console.log("--- UNASEMEJE ø DIA PROVIDER STATUS ---");
 console.log("P1 (Delixgains):", "https://delixgainske.com/api/v2", process.env.SMM_API_KEY ? "✅" : "❌");
-verifyPaynecta(); // Run Paynecta check
+verifyPaynecta();
 
 const app = express();
 
@@ -56,20 +61,11 @@ MIDDLEWARE & CONFIG
 app.use(cors({
     origin: ["https://unasemeje-frontend.vercel.app", "http://localhost:3000", "http://localhost:5000"],
     methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"]
+    allowedHeaders: ["Content-Type", "Authorization", "X-API-Key", "X-User-Email"]
 }));
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
-
-/**
-=========================================
-STRICT OWNER CREDENTIALS
-Locked to your verified identity.
-=========================================
-*/
-const ADMIN_EMAIL = "diasamratbarusz@gmail.com".toLowerCase();
-const ADMIN_PHONE = "0715509440";
 
 // Connect to MongoDB
 connectDB();
@@ -92,10 +88,6 @@ function auth(req, res, next) {
     }
 }
 
-/**
-STRICT ADMIN MIDDLEWARE
-This is the final gatekeeper. It checks your unique email and phone.
-*/
 function adminAuth(req, res, next) {
     auth(req, res, () => {
         const userEmail = req.user.email ? req.user.email.toLowerCase() : "";
@@ -122,11 +114,10 @@ async function giveReferralBonus(userId, orderCost) {
         if (!user || !user.referredBy) return;
         const referrer = await User.findOne({ referralCode: user.referredBy });
         if (!referrer) return;
-        const bonus = orderCost * 0.10; // ✅ 10% Referral Bonus
+        const bonus = orderCost * 0.10; // 10% Bonus
         referrer.balance += bonus;
         referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
         await referrer.save();
-        log(`Referral bonus of KES ${bonus} given to ${referrer.username}`);
     } catch (err) { log("Referral Bonus Error: " + err.message); }
 }
 
@@ -156,7 +147,121 @@ function applyFinalPrice(originalRate, name) {
 
 /**
 =========================================
-PUBLIC / USER API ENDPOINTS
+PAYNECTA WEBHOOK & CALLBACKS
+=========================================
+*/
+app.post("/api/paynecta/webhook", async (req, res) => {
+    const event = req.body;
+    log(`Incoming Webhook: ${event.event_type} | ID: ${event.event_id}`);
+
+    // Respond 200 immediately to Paynecta
+    res.status(200).send("Webhook received");
+
+    try {
+        const { event_type, data } = event;
+        const transaction = data.transaction;
+        const phone = transaction.mobile_number || data.PhoneNumber;
+
+        // 1. Handle Successful Payment
+        if (event_type === "payment.completed") {
+            // Find user by phone number
+            const user = await User.findOne({ phone: String(phone) });
+            
+            if (user) {
+                // Record the deposit
+                await Deposit.create({
+                    userId: user._id,
+                    userEmail: user.email,
+                    phone: user.phone,
+                    amount: Number(transaction.amount),
+                    transactionCode: data.MpesaReceiptNumber || transaction.reference,
+                    status: "completed"
+                });
+
+                // Update User Balance
+                user.balance += Number(transaction.amount);
+                await user.save();
+                log(`✅ Auto-Deposit: KES ${transaction.amount} added to ${user.username}`);
+            } else {
+                log(`⚠️ Webhook received but no user found with phone: ${phone}`);
+            }
+        } 
+        
+        // 2. Handle Failed or Cancelled (Optional Logging)
+        else if (event_type === "payment.failed" || event_type === "payment.cancelled") {
+            log(`❌ Payment ${event_type}: Ref ${transaction.reference} | Reason: ${data.reason || "N/A"}`);
+        }
+
+    } catch (err) {
+        log(`Webhook Processing Error: ${err.message}`);
+    }
+});
+
+/**
+=========================================
+PAYNECTA INTEGRATION ENDPOINTS
+=========================================
+*/
+
+// 1. Initialize M-Pesa STK Push
+app.post("/api/paynecta/initialize", auth, async (req, res) => {
+    try {
+        const { code, amount, mobile_number } = req.body;
+        
+        const response = await axios.post(`${PAYNECTA_BASE_URL}/payment/initialize`, {
+            code,
+            amount,
+            mobile_number
+        }, {
+            headers: {
+                "X-API-Key": process.env.PAYNECTA_API_KEY,
+                "X-User-Email": ADMIN_EMAIL,
+                "Content-Type": "application/json"
+            }
+        });
+
+        res.status(response.status).json(response.data);
+    } catch (error) {
+        const status = error.response ? error.response.status : 500;
+        res.status(status).json(error.response ? error.response.data : { error: "Payment initiation failed" });
+    }
+});
+
+// 2. Check Payment Status
+app.get("/api/paynecta/status", auth, async (req, res) => {
+    try {
+        const { transaction_reference } = req.query;
+        const response = await axios.get(`${PAYNECTA_BASE_URL}/payment/status`, {
+            params: { transaction_reference },
+            headers: {
+                "X-API-Key": process.env.PAYNECTA_API_KEY,
+                "X-User-Email": ADMIN_EMAIL
+            }
+        });
+        res.json(response.data);
+    } catch (error) {
+        res.status(400).json({ success: false, message: "Could not retrieve status" });
+    }
+});
+
+// 3. Get All Available Payment Links
+app.get("/api/paynecta/links", auth, async (req, res) => {
+    try {
+        const response = await axios.get(`${PAYNECTA_BASE_URL}/links`, {
+            headers: {
+                "X-API-Key": process.env.PAYNECTA_API_KEY,
+                "X-User-Email": ADMIN_EMAIL
+            }
+        });
+        res.json(response.data);
+    } catch (error) {
+        res.status(401).json({ success: false, message: "Failed to fetch links" });
+    }
+});
+
+/**
+=========================================
+SMM & USER ENDPOINTS
 =========================================
 */
 
@@ -188,26 +293,11 @@ app.post("/api/login", async (req, res) => {
             $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }],
             password
         });
-
         if (!user) return res.status(400).json({ error: "Invalid credentials" });  
 
-        const token = jwt.sign({   
-            id: user._id,   
-            email: user.email,   
-            username: user.username,  
-            phone: user.phone   
-        }, process.env.JWT_SECRET, { expiresIn: "7d" });  
-  
+        const token = jwt.sign({ id: user._id, email: user.email, username: user.username, phone: user.phone }, process.env.JWT_SECRET, { expiresIn: "7d" });  
         res.json({ token, balance: user.balance });
     } catch (err) { res.status(500).json({ error: "Login failed" }); }
-});
-
-// GET USER INFO
-app.get("/api/me", auth, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select("-password");
-        res.json(user);
-    } catch (err) { res.status(500).json({ error: "Error fetching profile" }); }
 });
 
 // GET SERVICES
@@ -286,70 +376,14 @@ app.post("/api/order", auth, async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Order failed." }); }
 });
 
-// SYNC HISTORY
-app.get("/api/sync-orders", auth, async (req, res) => {
-    try {
-        const activeOrders = await Order.find({
-            userId: req.user.id,
-            status: { $nin: ["completed", "canceled", "partial"] }
-        });
-
-        if (activeOrders.length > 0) {  
-            const ids = activeOrders.map(o => o.orderId).join(",");  
-            const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&orders=${ids}`;  
-            const response = await axios.get(url);  
-      
-            for (let orderId in response.data) {  
-                const data = response.data[orderId];  
-                if (data?.status) {  
-                    await Order.findOneAndUpdate({ orderId }, { status: data.status.toLowerCase() });  
-                }  
-            }  
-        }  
-        const updated = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });  
-        res.json(updated);
-    } catch (err) { res.status(500).json({ error: "Failed to sync orders" }); }
-});
-
-// DEPOSIT
-app.post("/api/deposit", auth, async (req, res) => {
-    try {
-        const { amount, transactionCode } = req.body;
-        const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
-        if (exists) return res.status(400).json({ error: "Code already submitted" });
-
-        await Deposit.create({  
-            userId: req.user.id,   
-            userEmail: req.user.email,  
-            phone: req.user.phone,  
-            amount: Number(amount),  
-            transactionCode: transactionCode.toUpperCase(),   
-            status: "pending"  
-        });  
-        res.json({ success: true, message: "Verification pending" });
-    } catch (error) { res.status(500).json({ error: "Submission failed" }); }
-});
-
 /**
 =========================================
-ADMIN ONLY API ENDPOINTS
-Protected by adminAuth identity verification.
+ADMIN ENDPOINTS
 =========================================
 */
-
 app.get("/api/admin/users", adminAuth, async (req, res) => {
     const users = await User.find().select("-password");
     res.json(users);
-});
-
-app.get("/api/admin/deposits", adminAuth, async (req, res) => {
-    const deposits = await Deposit.find().sort({ createdAt: -1 });
-    res.json(deposits);
-});
-
-app.get("/api/admin/orders", adminAuth, async (req, res) => {
-    const orders = await Order.find().sort({ createdAt: -1 });
-    res.json(orders);
 });
 
 app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
@@ -368,16 +402,6 @@ app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Approval failed" }); }
 });
 
-app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
-    try {
-        const { userId, amount } = req.body;
-        const user = await User.findById(userId);
-        user.balance += Number(amount);
-        await user.save();
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: "Update failed" }); }
-});
-
 /**
 =========================================
 SERVER BOOT
@@ -388,7 +412,6 @@ pagesList.forEach(page => {
     app.get(`/${page}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${page}.html`)));
 });
 
-// Special static serve for admin to prevent easy discovery
 app.get("/admin", adminAuth, (req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));
 
 const PORT = process.env.PORT || 3000;
