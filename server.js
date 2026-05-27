@@ -21,11 +21,12 @@ const Service = require("./models/Service");
 const ADMIN_EMAIL = "diasamratb@gmail.com".toLowerCase();
 const ADMIN_PHONE = "0715509440";
 const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
+// ADDED: Your dedicated payment page link
+const PAYNECTA_PAYMENT_PAGE = "https://paynecta.co.ke/pay/Unasemeje";
 
 // ================= PAYNECTA UTILS =================
 /**
  * Verifies the Paynecta API Key and User status on boot
- * UPDATED: Added optional chaining and null checks to prevent boot errors
  */
 async function verifyPaynecta() {
     try {
@@ -37,7 +38,6 @@ async function verifyPaynecta() {
         });
 
         if (response.data && response.data.success) {
-            // Using optional chaining ?. to prevent 'null' property reading errors
             const firstName = response.data.data?.kyc?.first_name || "N/A";
             const apiAccess = response.data.data?.api_access || "Unknown";
             
@@ -159,42 +159,44 @@ app.post("/api/paynecta/webhook", async (req, res) => {
     const event = req.body;
     log(`Incoming Webhook: ${event.event_type} | ID: ${event.event_id}`);
 
-    // Respond 200 immediately to Paynecta
     res.status(200).send("Webhook received");
 
     try {
         const { event_type, data } = event;
         const transaction = data.transaction;
-        const phone = transaction.mobile_number || data.PhoneNumber;
+        
+        // Check for phone number in various Paynecta response formats
+        const phone = transaction?.mobile_number || data?.PhoneNumber || data?.phone;
 
-        // 1. Handle Successful Payment
         if (event_type === "payment.completed") {
-            // Find user by phone number
+            // Find user by phone number (Standardizing format)
             const user = await User.findOne({ phone: String(phone) });
             
             if (user) {
-                // Record the deposit
-                await Deposit.create({
-                    userId: user._id,
-                    userEmail: user.email,
-                    phone: user.phone,
-                    amount: Number(transaction.amount),
-                    transactionCode: data.MpesaReceiptNumber || transaction.reference,
-                    status: "completed"
-                });
+                // Prevent duplicate deposits by checking transactionCode
+                const transCode = data.MpesaReceiptNumber || transaction.reference;
+                const existingDeposit = await Deposit.findOne({ transactionCode: transCode });
 
-                // Update User Balance
-                user.balance += Number(transaction.amount);
-                await user.save();
-                log(`✅ Auto-Deposit: KES ${transaction.amount} added to ${user.username}`);
+                if (!existingDeposit) {
+                    await Deposit.create({
+                        userId: user._id,
+                        userEmail: user.email,
+                        phone: user.phone,
+                        amount: Number(transaction.amount),
+                        transactionCode: transCode,
+                        status: "completed"
+                    });
+
+                    user.balance += Number(transaction.amount);
+                    await user.save();
+                    log(`✅ Auto-Deposit: KES ${transaction.amount} added to ${user.username}`);
+                }
             } else {
                 log(`⚠️ Webhook received but no user found with phone: ${phone}`);
             }
         } 
-        
-        // 2. Handle Failed or Cancelled (Optional Logging)
         else if (event_type === "payment.failed" || event_type === "payment.cancelled") {
-            log(`❌ Payment ${event_type}: Ref ${transaction.reference} | Reason: ${data.reason || "N/A"}`);
+            log(`❌ Payment ${event_type}: Ref ${transaction?.reference} | Reason: ${data.reason || "N/A"}`);
         }
 
     } catch (err) {
@@ -207,6 +209,15 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 PAYNECTA INTEGRATION ENDPOINTS
 =========================================
 */
+
+// GET THE CUSTOM PAYMENT PAGE LINK
+app.get("/api/paynecta/link", auth, (req, res) => {
+    res.json({ 
+        success: true, 
+        payment_url: PAYNECTA_PAYMENT_PAGE,
+        instructions: "Use your registered phone number on the payment page for automatic balance update."
+    });
+});
 
 // 1. Initialize M-Pesa STK Push
 app.post("/api/paynecta/initialize", auth, async (req, res) => {
@@ -249,7 +260,7 @@ app.get("/api/paynecta/status", auth, async (req, res) => {
     }
 });
 
-// 3. Get All Available Payment Links
+// 3. Get All Available Payment Links (API side)
 app.get("/api/paynecta/links", auth, async (req, res) => {
     try {
         const response = await axios.get(`${PAYNECTA_BASE_URL}/links`, {
