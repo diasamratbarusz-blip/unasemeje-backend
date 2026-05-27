@@ -25,6 +25,7 @@ const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
 // ================= PAYNECTA UTILS =================
 /**
  * Verifies the Paynecta API Key and User status on boot
+ * UPDATED: Added optional chaining and null checks to prevent boot errors
  */
 async function verifyPaynecta() {
     try {
@@ -35,13 +36,17 @@ async function verifyPaynecta() {
             }
         });
 
-        if (response.data.success) {
-            console.log("Paynecta Status:", "✅ Verified -", response.data.data.kyc.first_name, "| Access:", response.data.data.api_access);
+        if (response.data && response.data.success) {
+            // Using optional chaining ?. to prevent 'null' property reading errors
+            const firstName = response.data.data?.kyc?.first_name || "N/A";
+            const apiAccess = response.data.data?.api_access || "Unknown";
+            
+            console.log("Paynecta Status:", "✅ Verified -", firstName, "| Access:", apiAccess);
         } else {
-            console.log("Paynecta Status:", "❌", response.data.message);
+            console.log("Paynecta Status:", "❌", response.data?.message || "Verification Failed");
         }
     } catch (error) {
-        const errorMsg = error.response ? error.response.data.message : error.message;
+        const errorMsg = error.response ? error.response.data?.message : error.message;
         console.log("Paynecta Status:", "❌ Error:", errorMsg);
     }
 }
