@@ -26,7 +26,7 @@ async function verifyPaynecta() {
         const response = await axios.get("https://paynecta.co.ke/api/v1/auth/verify", {
             headers: {
                 "X-API-Key": process.env.PAYNECTA_API_KEY || "your_api_key_here",
-                "X-User-Email": "diasamratbarusz@gmail.com" // Tied to your admin email
+                "X-User-Email": "diasamratb@gmail.com" // Tied to your admin email
             }
         });
 
