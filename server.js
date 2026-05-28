@@ -26,7 +26,7 @@ const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
 
 const PAYNECTA_PAYMENT_PAGE =
     process.env.PAYNECTA_PAYMENT_PAGE ||
-    "https://paynecta.co.ke/pay/Unasemeje";
+    "https://paynecta.co.ke/pay/unasemeje-";
 
 const app = express();
 
