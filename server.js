@@ -21,8 +21,9 @@ const Service = require("./models/Service");
 const ADMIN_EMAIL = "diasamratb@gmail.com".toLowerCase();
 const ADMIN_PHONE = "0715509440";
 const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
-// ADDED: Your dedicated payment page link
-const PAYNECTA_PAYMENT_PAGE = "https://paynecta.co.ke/pay/Unasemeje";
+
+// UPDATED: Fetches the payment link from environment variables or defaults to your link
+const PAYNECTA_PAYMENT_PAGE = process.env.PAYNECTA_BASE_URL || "https://paynecta.co.ke/pay/Unasemeje";
 
 // ================= PAYNECTA UTILS =================
 /**
@@ -159,21 +160,26 @@ app.post("/api/paynecta/webhook", async (req, res) => {
     const event = req.body;
     log(`Incoming Webhook: ${event.event_type} | ID: ${event.event_id}`);
 
+    // Immediately respond to Paynecta to prevent timeouts
     res.status(200).send("Webhook received");
 
     try {
         const { event_type, data } = event;
         const transaction = data.transaction;
         
-        // Check for phone number in various Paynecta response formats
+        // Extract phone number from nested data
         const phone = transaction?.mobile_number || data?.PhoneNumber || data?.phone;
 
         if (event_type === "payment.completed") {
-            // Find user by phone number (Standardizing format)
-            const user = await User.findOne({ phone: String(phone) });
+            // Standardize phone search (remove 0 if it exists)
+            let searchPhone = String(phone);
+            if (searchPhone.startsWith('0')) searchPhone = searchPhone.substring(1);
+            if (searchPhone.startsWith('254')) searchPhone = searchPhone.substring(3);
+
+            // Find user by partial phone match to ensure we catch variations
+            const user = await User.findOne({ phone: { $regex: searchPhone } });
             
             if (user) {
-                // Prevent duplicate deposits by checking transactionCode
                 const transCode = data.MpesaReceiptNumber || transaction.reference;
                 const existingDeposit = await Deposit.findOne({ transactionCode: transCode });
 
@@ -192,7 +198,7 @@ app.post("/api/paynecta/webhook", async (req, res) => {
                     log(`✅ Auto-Deposit: KES ${transaction.amount} added to ${user.username}`);
                 }
             } else {
-                log(`⚠️ Webhook received but no user found with phone: ${phone}`);
+                log(`⚠️ Webhook received but no user found with phone segment: ${searchPhone}`);
             }
         } 
         else if (event_type === "payment.failed" || event_type === "payment.cancelled") {
@@ -210,7 +216,7 @@ PAYNECTA INTEGRATION ENDPOINTS
 =========================================
 */
 
-// GET THE CUSTOM PAYMENT PAGE LINK
+// GET THE CUSTOM PAYMENT PAGE LINK (Used by "Manual Payment Page" button)
 app.get("/api/paynecta/link", auth, (req, res) => {
     res.json({ 
         success: true, 
@@ -219,15 +225,20 @@ app.get("/api/paynecta/link", auth, (req, res) => {
     });
 });
 
-// 1. Initialize M-Pesa STK Push
+// 1. Initialize M-Pesa STK Push (Used by "Pay Now (STK)" button)
 app.post("/api/paynecta/initialize", auth, async (req, res) => {
     try {
         const { code, amount, mobile_number } = req.body;
         
+        // Ensure phone starts with 254 if not already
+        let formattedPhone = String(mobile_number);
+        if (formattedPhone.startsWith('0')) formattedPhone = '254' + formattedPhone.substring(1);
+        if (!formattedPhone.startsWith('254')) formattedPhone = '254' + formattedPhone;
+
         const response = await axios.post(`${PAYNECTA_BASE_URL}/payment/initialize`, {
-            code,
+            code: code || "600",
             amount,
-            mobile_number
+            mobile_number: formattedPhone
         }, {
             headers: {
                 "X-API-Key": process.env.PAYNECTA_API_KEY,
