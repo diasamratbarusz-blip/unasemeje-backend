@@ -289,6 +289,69 @@ function applyFinalPrice(originalRate, name) {
 
 /**
  * =========================================
+ * PAYNECTA HELPERS
+ * =========================================
+ */
+
+// FORMAT KENYAN PHONE
+function formatKenyaPhone(phone) {
+
+    let formatted = String(phone || "")
+        .replace(/\D/g, "");
+
+    if (formatted.startsWith("0")) {
+        formatted = "254" + formatted.substring(1);
+    }
+
+    if (formatted.startsWith("7")) {
+        formatted = "254" + formatted;
+    }
+
+    return formatted;
+}
+
+// VALIDATE PAYMENT
+function validatePaynectaPayment(
+    code,
+    phone,
+    amount
+) {
+
+    if (!code) {
+        return {
+            valid: false,
+            error: "Payment link code is required"
+        };
+    }
+
+    if (!phone) {
+        return {
+            valid: false,
+            error: "Phone number is required"
+        };
+    }
+
+    if (!amount || Number(amount) < 1) {
+        return {
+            valid: false,
+            error: "Minimum amount is KES 1"
+        };
+    }
+
+    if (Number(amount) > 250000) {
+        return {
+            valid: false,
+            error: "Maximum amount is KES 250,000"
+        };
+    }
+
+    return {
+        valid: true
+    };
+}
+
+/**
+ * =========================================
  * PAYNECTA WEBHOOK
  * =========================================
  */
@@ -508,15 +571,7 @@ app.post("/api/paynecta/stkpush", auth, async (req, res) => {
             });
         }
 
-        phone = String(phone).replace(/\D/g, "");
-
-        if (phone.startsWith("0")) {
-            phone = "254" + phone.substring(1);
-        }
-
-        if (phone.startsWith("7")) {
-            phone = "254" + phone;
-        }
+        phone = formatKenyaPhone(phone);
 
         const payload = {
             amount: Number(amount),
@@ -558,58 +613,280 @@ app.post("/api/paynecta/stkpush", auth, async (req, res) => {
     }
 });
 
-// PAYMENT INITIALIZE
-app.post("/api/paynecta/initialize", auth, async (req, res) => {
+/**
+ * =========================================
+ * PAYNECTA SDK STYLE INITIALIZE
+ * =========================================
+ */
+app.post(
+    "/api/paynecta/sdk/initialize",
+    auth,
+    async (req, res) => {
 
-    try {
+        try {
 
-        const {
-            code,
-            amount,
-            mobile_number
-        } = req.body;
+            let {
+                code,
+                mobile_number,
+                amount
+            } = req.body;
 
-        let formattedPhone = String(mobile_number);
+            const validation =
+                validatePaynectaPayment(
+                    code,
+                    mobile_number,
+                    amount
+                );
 
-        if (formattedPhone.startsWith("0")) {
-            formattedPhone =
-                "254" + formattedPhone.substring(1);
-        }
+            if (!validation.valid) {
 
-        if (!formattedPhone.startsWith("254")) {
-            formattedPhone = "254" + formattedPhone;
-        }
+                return res.status(400).json({
+                    success: false,
+                    error: validation.error
+                });
+            }
 
-        const response = await axios.post(
-            `${PAYNECTA_BASE_URL}/payment/initialize`,
-            {
-                code: code || "600",
-                amount,
-                mobile_number: formattedPhone
-            },
-            {
-                headers: {
-                    "X-API-Key": process.env.PAYNECTA_API_KEY,
-                    "X-User-Email": ADMIN_EMAIL,
-                    "Content-Type": "application/json"
+            mobile_number =
+                formatKenyaPhone(
+                    mobile_number
+                );
+
+            const payload = {
+                code,
+                mobile_number,
+                amount: Number(amount)
+            };
+
+            const response = await axios.post(
+                `${PAYNECTA_BASE_URL}/payment/initialize`,
+                payload,
+                {
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+
+                        "X-API-Key":
+                            process.env.PAYNECTA_API_KEY,
+
+                        "X-User-Email":
+                            ADMIN_EMAIL
+                    }
                 }
-            }
-        );
+            );
 
-        res.status(response.status).json(response.data);
+            const transactionReference =
+                response.data?.data
+                    ?.transaction_reference ||
 
-    } catch (error) {
+                response.data?.transaction_reference ||
 
-        const status =
-            error.response?.status || 500;
+                response.data?.reference ||
 
-        res.status(status).json(
-            error.response?.data || {
-                error: "Payment initiation failed"
-            }
-        );
+                null;
+
+            res.json({
+                success: true,
+                message:
+                    "Payment initialized successfully",
+
+                transaction_reference:
+                    transactionReference,
+
+                data: response.data
+            });
+
+        } catch (error) {
+
+            console.log(
+                "PAYNECTA SDK INITIALIZE ERROR:",
+                error.response?.data ||
+                error.message
+            );
+
+            res.status(
+                error.response?.status || 500
+            ).json({
+                success: false,
+                error:
+                    error.response?.data?.message ||
+
+                    "Failed to initialize payment"
+            });
+        }
     }
-});
+);
+
+/**
+ * =========================================
+ * PAYNECTA SDK VALIDATED INITIALIZE
+ * =========================================
+ */
+app.post(
+    "/api/paynecta/sdk/initialize-with-validation",
+    auth,
+    async (req, res) => {
+
+        try {
+
+            let {
+                code,
+                mobile_number,
+                amount
+            } = req.body;
+
+            const validation =
+                validatePaynectaPayment(
+                    code,
+                    mobile_number,
+                    amount
+                );
+
+            if (!validation.valid) {
+
+                return res.status(400).json({
+                    success: false,
+                    error: validation.error
+                });
+            }
+
+            mobile_number =
+                formatKenyaPhone(
+                    mobile_number
+                );
+
+            const payload = {
+                code,
+                mobile_number,
+                amount: Number(amount)
+            };
+
+            const response = await axios.post(
+                `${PAYNECTA_BASE_URL}/payment/initialize`,
+                payload,
+                {
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+
+                        "X-API-Key":
+                            process.env.PAYNECTA_API_KEY,
+
+                        "X-User-Email":
+                            ADMIN_EMAIL
+                    }
+                }
+            );
+
+            const transactionReference =
+                response.data?.data
+                    ?.transaction_reference ||
+
+                response.data?.transaction_reference ||
+
+                response.data?.reference ||
+
+                null;
+
+            res.json({
+                success: true,
+                message:
+                    "Validated payment initialized successfully",
+
+                transaction_reference:
+                    transactionReference,
+
+                data: response.data
+            });
+
+        } catch (error) {
+
+            console.log(
+                "PAYNECTA VALIDATION ERROR:",
+                error.response?.data ||
+                error.message
+            );
+
+            res.status(
+                error.response?.status || 500
+            ).json({
+                success: false,
+                error:
+                    error.response?.data?.message ||
+
+                    "Failed to initialize validated payment"
+            });
+        }
+    }
+);
+
+/**
+ * =========================================
+ * GET TRANSACTION REFERENCE
+ * =========================================
+ */
+app.get(
+    "/api/paynecta/transaction-reference",
+    auth,
+    async (req, res) => {
+
+        try {
+
+            const {
+                transaction_reference
+            } = req.query;
+
+            if (!transaction_reference) {
+
+                return res.status(400).json({
+                    success: false,
+                    error:
+                        "Transaction reference is required"
+                });
+            }
+
+            const response = await axios.get(
+                `${PAYNECTA_BASE_URL}/payment/status`,
+                {
+                    params: {
+                        transaction_reference
+                    },
+
+                    headers: {
+                        "X-API-Key":
+                            process.env.PAYNECTA_API_KEY,
+
+                        "X-User-Email":
+                            ADMIN_EMAIL
+                    }
+                }
+            );
+
+            res.json({
+                success: true,
+                transaction_reference,
+                data: response.data
+            });
+
+        } catch (error) {
+
+            console.log(
+                "TRANSACTION REFERENCE ERROR:",
+                error.response?.data ||
+                error.message
+            );
+
+            res.status(
+                error.response?.status || 500
+            ).json({
+                success: false,
+                error:
+                    error.response?.data?.message ||
+
+                    "Failed to retrieve transaction reference"
+            });
+        }
+    }
+);
 
 // CHECK STATUS
 app.get("/api/paynecta/status", auth, async (req, res) => {
