@@ -1,5 +1,6 @@
 // ================= IMPORTS =================
 require("dotenv").config();
+
 const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
@@ -62,9 +63,7 @@ app.use(cors({
 }));
 
 app.use(express.json());
-
 app.use(express.urlencoded({ extended: true }));
-
 app.use(express.static(path.join(__dirname, "public")));
 
 /**
@@ -264,15 +263,10 @@ function detectPlatform(service = {}) {
             .toLowerCase();
 
     if (/(instagram|insta|ig)/.test(text)) return "Instagram";
-
     if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
-
     if (/(youtube|yt)/.test(text)) return "YouTube";
-
     if (/(facebook|fb)/.test(text)) return "Facebook";
-
     if (/(twitter|x)/.test(text)) return "Twitter/X";
-
     if (/(telegram|tg)/.test(text)) return "Telegram";
 
     return "Other";
@@ -285,9 +279,7 @@ function applyFinalPrice(originalRate, name) {
     let markup = 40;
 
     if (t.includes("like")) markup = 30;
-
     if (t.includes("follower")) markup = 25;
-
     if (t.includes("view")) markup = 35;
 
     return Number(
@@ -386,6 +378,49 @@ app.get("/api/paynecta/link", auth, (req, res) => {
         success: true,
         payment_url: PAYNECTA_PAYMENT_PAGE
     });
+});
+
+/**
+ * =========================================
+ * GET PAYNECTA PAYMENT LINK DETAILS
+ * =========================================
+ */
+app.get("/api/paynecta/link/:code", auth, async (req, res) => {
+
+    try {
+
+        const { code } = req.params;
+
+        const response = await axios.get(
+            `${PAYNECTA_BASE_URL}/links/${code}`,
+            {
+                headers: {
+                    "X-API-Key": process.env.PAYNECTA_API_KEY,
+                    "X-User-Email": ADMIN_EMAIL
+                }
+            }
+        );
+
+        res.json({
+            success: true,
+            message: "Link retrieved successfully",
+            data: response.data.data
+        });
+
+    } catch (error) {
+
+        console.log(
+            "PAYNECTA LINK ERROR:",
+            error.response?.data || error.message
+        );
+
+        res.status(500).json({
+            success: false,
+            error:
+                error.response?.data?.message ||
+                "Failed to retrieve payment link"
+        });
+    }
 });
 
 // VERIFY API
@@ -669,453 +704,6 @@ app.post("/api/login", async (req, res) => {
             error: "Login failed"
         });
     }
-});
-
-// GET USER
-app.get("/api/me", auth, async (req, res) => {
-
-    try {
-
-        const user = await User.findById(
-            req.user.id
-        ).select("-password");
-
-        res.json(user);
-
-    } catch (err) {
-
-        res.status(500).json({
-            error: "Error fetching profile"
-        });
-    }
-});
-
-/**
- * =========================================
- * SERVICES
- * =========================================
- */
-app.get("/api/services", async (req, res) => {
-
-    try {
-
-        const forceRefresh =
-            req.query.refresh === "true";
-
-        let services = await Service.find();
-
-        if (!services.length || forceRefresh) {
-
-            const url =
-                `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
-
-            const response = await axios.get(url);
-
-            const list = Array.isArray(response.data)
-                ? response.data
-                : [];
-
-            if (list.length > 0) {
-
-                await Service.deleteMany({});
-
-                const mapped = list.map(s => ({
-                    serviceId: String(s.service),
-                    name: cleanServiceName(s.name),
-                    rate: Number(s.rate || 0),
-                    min: Number(s.min || 1),
-                    max: Number(s.max || 10000),
-                    category: s.category || "General",
-                    platform: detectPlatform(s),
-                    provider: "DELIXGAINS"
-                }));
-
-                await Service.insertMany(mapped);
-
-                services = await Service.find();
-            }
-        }
-
-        const grouped = {};
-
-        services.forEach(s => {
-
-            const p = s.platform;
-            const c = s.category;
-
-            if (!grouped[p]) grouped[p] = {};
-
-            if (!grouped[p][c]) grouped[p][c] = [];
-
-            grouped[p][c].push({
-                ...s.toObject(),
-                rate: applyFinalPrice(s.rate, s.name)
-            });
-        });
-
-        res.json({
-            success: true,
-            data: grouped
-        });
-
-    } catch (err) {
-
-        res.status(500).json({
-            error: "Failed to load services"
-        });
-    }
-});
-
-/**
- * =========================================
- * PLACE ORDER
- * =========================================
- */
-app.post("/api/order", auth, async (req, res) => {
-
-    try {
-
-        const {
-            serviceId,
-            link,
-            quantity
-        } = req.body;
-
-        const service = await Service.findOne({
-            serviceId
-        });
-
-        if (!service) {
-
-            return res.status(404).json({
-                error: "Service unavailable"
-            });
-        }
-
-        const user = await User.findById(req.user.id);
-
-        const totalCost =
-            (applyFinalPrice(service.rate, service.name) / 1000)
-            * Number(quantity);
-
-        if (user.balance < totalCost) {
-
-            return res.status(400).json({
-                error: "Insufficient balance"
-            });
-        }
-
-        const providerRes = await axios.get(
-            `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`
-        );
-
-        if (
-            providerRes.data &&
-            providerRes.data.order
-        ) {
-
-            const order = await Order.create({
-                userId: user._id,
-                userEmail: user.email,
-                serviceId,
-                serviceName: service.name,
-                orderId: String(providerRes.data.order),
-                link,
-                quantity,
-                cost: totalCost,
-                status: "pending"
-            });
-
-            user.balance -= totalCost;
-
-            await user.save();
-
-            await giveReferralBonus(
-                user._id,
-                totalCost
-            );
-
-            res.json({
-                success: true,
-                orderId: order.orderId,
-                newBalance: user.balance.toFixed(2)
-            });
-
-        } else {
-
-            res.status(400).json({
-                error: "Provider error."
-            });
-        }
-
-    } catch (err) {
-
-        res.status(500).json({
-            error: "Order failed."
-        });
-    }
-});
-
-/**
- * =========================================
- * SYNC ORDERS
- * =========================================
- */
-app.get("/api/sync-orders", auth, async (req, res) => {
-
-    try {
-
-        const activeOrders = await Order.find({
-            userId: req.user.id,
-            status: {
-                $nin: [
-                    "completed",
-                    "canceled",
-                    "partial"
-                ]
-            }
-        });
-
-        if (activeOrders.length > 0) {
-
-            const ids = activeOrders
-                .map(o => o.orderId)
-                .join(",");
-
-            const url =
-                `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&orders=${ids}`;
-
-            const response = await axios.get(url);
-
-            for (let orderId in response.data) {
-
-                const data = response.data[orderId];
-
-                if (data?.status) {
-
-                    await Order.findOneAndUpdate(
-                        { orderId },
-                        {
-                            status:
-                                data.status.toLowerCase()
-                        }
-                    );
-                }
-            }
-        }
-
-        const updated = await Order.find({
-            userId: req.user.id
-        }).sort({ createdAt: -1 });
-
-        res.json(updated);
-
-    } catch (err) {
-
-        res.status(500).json({
-            error: "Failed to sync orders"
-        });
-    }
-});
-
-/**
- * =========================================
- * MANUAL DEPOSIT
- * =========================================
- */
-app.post("/api/deposit", auth, async (req, res) => {
-
-    try {
-
-        const {
-            amount,
-            transactionCode
-        } = req.body;
-
-        const exists = await Deposit.findOne({
-            transactionCode:
-                transactionCode.toUpperCase()
-        });
-
-        if (exists) {
-
-            return res.status(400).json({
-                error: "Code already submitted"
-            });
-        }
-
-        await Deposit.create({
-            userId: req.user.id,
-            userEmail: req.user.email,
-            phone: req.user.phone,
-            amount: Number(amount),
-            transactionCode:
-                transactionCode.toUpperCase(),
-            status: "pending"
-        });
-
-        res.json({
-            success: true,
-            message: "Verification pending"
-        });
-
-    } catch (error) {
-
-        res.status(500).json({
-            error: "Submission failed"
-        });
-    }
-});
-
-/**
- * =========================================
- * ADMIN ENDPOINTS
- * =========================================
- */
-
-// USERS
-app.get("/api/admin/users", adminAuth, async (req, res) => {
-
-    const users = await User.find()
-        .select("-password");
-
-    res.json(users);
-});
-
-// DEPOSITS
-app.get("/api/admin/deposits", adminAuth, async (req, res) => {
-
-    const deposits = await Deposit.find()
-        .sort({ createdAt: -1 });
-
-    res.json(deposits);
-});
-
-// ORDERS
-app.get("/api/admin/orders", adminAuth, async (req, res) => {
-
-    const orders = await Order.find()
-        .sort({ createdAt: -1 });
-
-    res.json(orders);
-});
-
-// APPROVE DEPOSIT
-app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
-
-    try {
-
-        const { depositId } = req.body;
-
-        const dep = await Deposit.findById(
-            depositId
-        );
-
-        if (!dep || dep.status !== "pending") {
-
-            return res.status(400).json({
-                error: "Invalid deposit"
-            });
-        }
-
-        const user = await User.findById(
-            dep.userId
-        );
-
-        user.balance += dep.amount;
-
-        dep.status = "completed";
-
-        await user.save();
-
-        await dep.save();
-
-        res.json({
-            success: true
-        });
-
-    } catch (err) {
-
-        res.status(500).json({
-            error: "Approval failed"
-        });
-    }
-});
-
-// UPDATE BALANCE
-app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
-
-    try {
-
-        const { userId, amount } = req.body;
-
-        const user = await User.findById(userId);
-
-        if (!user) {
-
-            return res.status(404).json({
-                error: "User not found"
-            });
-        }
-
-        user.balance += Number(amount);
-
-        await user.save();
-
-        res.json({
-            success: true,
-            balance: user.balance
-        });
-
-    } catch (err) {
-
-        res.status(500).json({
-            error: "Update failed"
-        });
-    }
-});
-
-/**
- * =========================================
- * STATIC ROUTES
- * =========================================
- */
-const pagesList = [
-    "home",
-    "platform",
-    "packages",
-    "new-order",
-    "my-orders",
-    "services",
-    "add-funds",
-    "referrals",
-    "dashboard"
-];
-
-pagesList.forEach(page => {
-
-    app.get(`/${page}`, (req, res) => {
-
-        res.sendFile(
-            path.join(
-                __dirname,
-                "public",
-                `${page}.html`
-            )
-        );
-    });
-});
-
-// ADMIN PAGE
-app.get("/admin", adminAuth, (req, res) => {
-
-    res.sendFile(
-        path.join(
-            __dirname,
-            "public",
-            "admin.html"
-        )
-    );
 });
 
 // HOME PAGE
