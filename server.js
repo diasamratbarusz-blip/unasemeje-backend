@@ -26,7 +26,7 @@ const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
 
 const PAYNECTA_PAYMENT_PAGE =
     process.env.PAYNECTA_PAYMENT_PAGE ||
-    "https://paynecta.co.ke/pay/unasemeje-";
+    "https://paynecta.co.ke/pay/Unasemeje";
 
 const app = express();
 
@@ -382,7 +382,7 @@ app.get("/api/paynecta/link", auth, (req, res) => {
 
 /**
  * =========================================
- * GET PAYNECTA PAYMENT LINK DETAILS
+ * GET SINGLE PAYNECTA LINK DETAILS
  * =========================================
  */
 app.get("/api/paynecta/link/:code", auth, async (req, res) => {
@@ -410,7 +410,7 @@ app.get("/api/paynecta/link/:code", auth, async (req, res) => {
     } catch (error) {
 
         console.log(
-            "PAYNECTA LINK ERROR:",
+            "PAYNECTA SINGLE LINK ERROR:",
             error.response?.data || error.message
         );
 
@@ -419,6 +419,47 @@ app.get("/api/paynecta/link/:code", auth, async (req, res) => {
             error:
                 error.response?.data?.message ||
                 "Failed to retrieve payment link"
+        });
+    }
+});
+
+/**
+ * =========================================
+ * GET ALL PAYNECTA LINKS
+ * =========================================
+ */
+app.get("/api/paynecta/links", auth, async (req, res) => {
+
+    try {
+
+        const response = await axios.get(
+            `${PAYNECTA_BASE_URL}/links`,
+            {
+                headers: {
+                    "X-API-Key": process.env.PAYNECTA_API_KEY,
+                    "X-User-Email": ADMIN_EMAIL
+                }
+            }
+        );
+
+        res.json({
+            success: true,
+            message: "Links retrieved successfully",
+            data: response.data.data
+        });
+
+    } catch (error) {
+
+        console.log(
+            "PAYNECTA LINKS ERROR:",
+            error.response?.data || error.message
+        );
+
+        res.status(500).json({
+            success: false,
+            error:
+                error.response?.data?.message ||
+                "Failed to retrieve links"
         });
     }
 });
