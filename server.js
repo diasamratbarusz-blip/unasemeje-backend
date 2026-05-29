@@ -40,8 +40,11 @@ app.use(cors({
             "https://unasemeje-frontend.vercel.app",
             "http://localhost:3000",
             "http://localhost:5000",
-            "http://localhost:3001"
+            "http://localhost:3001",
+            "http://127.0.0.1:5500", // VS Code Live Server
+            "http://127.0.0.1:3000"
         ];
+        // Allow requests with no origin (like mobile apps or curl)
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -211,27 +214,22 @@ function formatKenyaPhone(phone) {
 
 /**
  * =========================================
- * PAYNECTA WEBHOOK (Optimized for SDK pattern)
+ * PAYNECTA WEBHOOK
  * =========================================
  */
 app.post("/api/paynecta/webhook", async (req, res) => {
-    // Paynecta expects a 200 response immediately to prevent retries
     res.status(200).json({ status: "success" });
 
     try {
         const { event_type, data } = req.body;
-        
-        // Handle successful payment
         if (event_type === "payment.completed") {
             const transaction = data.transaction;
             const rawPhone = transaction.mobile_number;
             
-            // Normalize phone for searching
             let searchPhone = String(rawPhone || "");
             if (searchPhone.startsWith("254")) searchPhone = searchPhone.substring(3);
             if (searchPhone.startsWith("0")) searchPhone = searchPhone.substring(1);
 
-            // Find user by partial phone match
             const user = await User.findOne({ phone: { $regex: searchPhone } });
 
             if (user) {
@@ -240,7 +238,6 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 
                 if (!existingDeposit) {
                     const depositAmount = Number(transaction.amount);
-                    
                     await Deposit.create({
                         userId: user._id,
                         userEmail: user.email,
@@ -249,55 +246,38 @@ app.post("/api/paynecta/webhook", async (req, res) => {
                         transactionCode: transCode,
                         status: "completed"
                     });
-
                     user.balance += depositAmount;
                     await user.save();
-                    log(`💰 Webhook: Credited KES ${depositAmount} to ${user.email} (Ref: ${transCode})`);
+                    log(`💰 Webhook: Credited KES ${depositAmount} to ${user.email}`);
                 }
-            } else {
-                log(`⚠️ Webhook: Received payment for untracked phone: ${rawPhone}`);
             }
         }
     } catch (err) {
-        log(`❌ Webhook Processing Error: ${err.message}`);
+        log(`❌ Webhook Error: ${err.message}`);
     }
 });
 
 /**
  * =========================================
- * PAYNECTA ENDPOINTS (Synced with SDK/API v1)
+ * PAYNECTA ENDPOINTS
  * =========================================
  */
 
-// 1. Direct Payment Link for Fallback
-app.get("/api/paynecta/links", auth, async (req, res) => {
+// Initialize STK Push - Support both "phone" and "mobile_number" from frontend
+app.post("/api/paynecta/stkpush", auth, async (req, res) => {
     try {
-        const response = await axios.get(`${PAYNECTA_BASE_URL}/links`, {
-            headers: { 
-                "X-API-Key": process.env.PAYNECTA_API_KEY, 
-                "X-User-Email": ADMIN_EMAIL 
-            }
-        });
-        res.json({ success: true, data: response.data.data });
-    } catch (error) {
-        // Return your manual fallback link if API link list fails
-        res.json({ success: true, data: [{ link_url: PAYNECTA_PAYMENT_PAGE }] });
-    }
-});
-
-// 2. Initialize STK Push
-app.post("/api/paynecta/initialize", auth, async (req, res) => {
-    try {
-        const { amount, mobile_number } = req.body;
+        const { amount } = req.body;
+        // Accept both common key names to prevent connection errors
+        const phone = req.body.phone || req.body.mobile_number;
         
-        if (!amount || !mobile_number) {
+        if (!amount || !phone) {
             return res.status(400).json({ success: false, error: "Amount and phone number are required" });
         }
 
         const payload = {
             amount: Number(amount),
-            mobile_number: formatKenyaPhone(mobile_number),
-            code: "STK", // "STK" triggers the push prompt
+            mobile_number: formatKenyaPhone(phone),
+            code: "STK",
             reference: "UNAS_" + Date.now()
         };
 
@@ -309,16 +289,14 @@ app.post("/api/paynecta/initialize", auth, async (req, res) => {
             }
         });
 
-        // The SDK/API returns success and transaction data
-        res.json(response.data);
+        res.json({ success: true, data: response.data });
     } catch (error) {
-        const errMsg = error.response?.data?.message || "Payment service temporarily unavailable";
+        const errMsg = error.response?.data?.message || "Payment service unavailable";
         log(`❌ STK Init Error: ${errMsg}`);
         res.status(500).json({ success: false, error: errMsg });
     }
 });
 
-// 3. Check Transaction Status (Polling)
 app.get("/api/paynecta/status", auth, async (req, res) => {
     try {
         const { transaction_reference } = req.query;
