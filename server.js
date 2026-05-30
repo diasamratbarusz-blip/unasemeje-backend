@@ -23,10 +23,6 @@ const ADMIN_PHONE = "0715509440";
 
 const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
 
-const PAYNECTA_PAYMENT_PAGE =
-    process.env.PAYNECTA_PAYMENT_PAGE ||
-    "https://paynecta.co.ke/pay/Unasemeje";
-
 const app = express();
 
 /**
@@ -35,29 +31,9 @@ const app = express();
  * =========================================
  */
 app.use(cors({
-    origin: function (origin, callback) {
-        const allowedOrigins = [
-            "https://unasemeje-frontend.vercel.app",
-            "http://localhost:3000",
-            "http://localhost:5000",
-            "http://localhost:3001",
-            "http://127.0.0.1:5500", // VS Code Live Server
-            "http://127.0.0.1:3000"
-        ];
-        // Allow requests with no origin (like mobile apps or curl)
-        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            callback(new Error("Not allowed by CORS"));
-        }
-    },
+    origin: "*", // Allow all for maximum compatibility during dev
     methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: [
-        "Content-Type",
-        "Authorization",
-        "X-API-Key",
-        "X-User-Email"
-    ]
+    allowedHeaders: ["Content-Type", "Authorization", "X-API-Key", "X-User-Email"]
 }));
 
 app.use(express.json());
@@ -66,57 +42,23 @@ app.use(express.static(path.join(__dirname, "public")));
 
 /**
  * =========================================
- * DATABASE CONNECTION & STARTUP
+ * DATABASE CONNECTION
  * =========================================
  */
 connectDB()
     .then(() => {
-        console.log("\n=======================================");
-        console.log("🚀 UNASEMEJE ø DIA SERVER STARTED");
-        console.log("=======================================\n");
-
-        console.log(
-            "P1 (Delixgains):",
-            "https://delixgainske.com/api/v2",
-            process.env.SMM_API_KEY ? "✅ CONNECTED" : "❌ NO API KEY"
-        );
-
-        console.log(
-            "Paynecta API:",
-            process.env.PAYNECTA_API_KEY ? "✅ CONNECTED" : "❌ NO API KEY"
-        );
-
+        console.log("🚀 UNASEMEJE ø DIA SERVER READY");
         verifyPaynecta();
     })
-    .catch(err => {
-        console.log("❌ MongoDB Connection Error:", err.message);
-    });
+    .catch(err => console.log("❌ DB Error:", err.message));
 
-/**
- * =========================================
- * PAYNECTA VERIFY UTILITY
- * =========================================
- */
 async function verifyPaynecta() {
     try {
-        const response = await axios.get(
-            `${PAYNECTA_BASE_URL}/auth/verify`,
-            {
-                headers: {
-                    "X-API-Key": process.env.PAYNECTA_API_KEY,
-                    "X-User-Email": ADMIN_EMAIL
-                }
-            }
-        );
-
-        if (response.data && response.data.success) {
-            console.log("✅ Paynecta Verified:", response.data.data?.email || ADMIN_EMAIL);
-        } else {
-            console.log("❌ Paynecta Verification Failed");
-        }
-    } catch (error) {
-        console.log("❌ Paynecta Verify Error:", error.response?.data || error.message);
-    }
+        await axios.get(`${PAYNECTA_BASE_URL}/auth/verify`, {
+            headers: { "X-API-Key": process.env.PAYNECTA_API_KEY, "X-User-Email": ADMIN_EMAIL }
+        });
+        console.log("✅ Paynecta Integrated");
+    } catch (e) { console.log("⚠️ Paynecta Offline"); }
 }
 
 /**
@@ -126,331 +68,252 @@ async function verifyPaynecta() {
  */
 function auth(req, res, next) {
     try {
-        const header = req.headers.authorization;
-        if (!header) return res.status(401).json({ error: "Access denied. No token provided." });
-
-        const token = header.split(" ")[1];
-        if (!token) return res.status(401).json({ error: "Invalid authorization token" });
-
+        const token = req.headers.authorization?.split(" ")[1];
+        if (!token) return res.status(401).json({ error: "Unauthorized" });
         req.user = jwt.verify(token, process.env.JWT_SECRET);
         next();
-    } catch (err) {
-        return res.status(401).json({ error: "Invalid or expired token" });
-    }
+    } catch (err) { res.status(401).json({ error: "Session Expired" }); }
 }
 
 function adminAuth(req, res, next) {
     auth(req, res, () => {
-        const userEmail = req.user.email ? req.user.email.toLowerCase() : "";
-        const isAuthorized = userEmail === ADMIN_EMAIL && req.user.phone === ADMIN_PHONE;
-
-        if (!isAuthorized) {
-            log(`UNAUTHORIZED ACCESS ATTEMPT: ${userEmail}`);
-            return res.status(403).json({ error: "Forbidden: Owner access only." });
-        }
+        const isOwner = req.user.email?.toLowerCase() === ADMIN_EMAIL || req.user.phone === ADMIN_PHONE;
+        if (!isOwner) return res.status(403).json({ error: "Access Denied" });
         next();
     });
 }
 
 /**
  * =========================================
- * BUSINESS LOGIC HELPERS
+ * BUSINESS HELPERS
  * =========================================
  */
-function generateReferralCode() {
-    return crypto.randomBytes(4).toString("hex");
-}
-
-async function giveReferralBonus(userId, orderCost) {
-    try {
-        const user = await User.findById(userId);
-        if (!user || !user.referredBy) return;
-
-        const referrer = await User.findOne({ referralCode: user.referredBy });
-        if (!referrer) return;
-
-        const bonus = orderCost * 0.10;
-        referrer.balance += bonus;
-        referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
-
-        await referrer.save();
-        log(`Referral bonus KES ${bonus} sent to ${referrer.username}`);
-    } catch (err) {
-        log("Referral Bonus Error: " + err.message);
-    }
-}
-
-function cleanServiceName(name = "") {
-    return String(name || "").replace(/\\/g, "").replace(/\[.*?\]/g, "").trim() || "SMM Service";
-}
-
-function detectPlatform(service = {}) {
-    const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
-    if (/(instagram|insta|ig)/.test(text)) return "Instagram";
-    if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
-    if (/(youtube|yt)/.test(text)) return "YouTube";
-    if (/(facebook|fb)/.test(text)) return "Facebook";
-    if (/(twitter|x)/.test(text)) return "Twitter/X";
-    if (/(telegram|tg)/.test(text)) return "Telegram";
-    return "Other";
-}
-
 function applyFinalPrice(originalRate, name) {
     const t = String(name).toLowerCase();
-    let markup = 40;
+    let markup = 40; // Base markup
     if (t.includes("like")) markup = 30;
-    if (t.includes("follower")) markup = 25;
-    if (t.includes("view")) markup = 35;
+    if (t.includes("follower")) markup = 35;
+    if (t.includes("view")) markup = 25;
     return Number((Number(originalRate || 0) + markup).toFixed(2));
 }
 
-function formatKenyaPhone(phone) {
-    let formatted = String(phone || "").replace(/\D/g, "");
-    if (formatted.startsWith("0")) formatted = "254" + formatted.substring(1);
-    else if (formatted.startsWith("7")) formatted = "254" + formatted;
-    else if (formatted.startsWith("254") && formatted.length === 12) return formatted;
-    return formatted;
+function detectPlatform(name, category) {
+    const text = `${name} ${category}`.toLowerCase();
+    if (text.includes("instagram")) return "Instagram";
+    if (text.includes("tiktok")) return "TikTok";
+    if (text.includes("youtube")) return "YouTube";
+    if (text.includes("facebook")) return "Facebook";
+    if (text.includes("twitter")) return "Twitter/X";
+    if (text.includes("telegram")) return "Telegram";
+    return "Other";
 }
 
 /**
  * =========================================
- * PAYNECTA WEBHOOK
+ * ADMIN DATA ROUTES
  * =========================================
  */
-app.post("/api/paynecta/webhook", async (req, res) => {
-    res.status(200).json({ status: "success" });
+app.get("/api/admin/users", adminAuth, async (req, res) => {
+    const users = await User.find().select("-password");
+    res.json(users);
+});
 
+app.get("/api/admin/deposits", adminAuth, async (req, res) => {
+    const deposits = await Deposit.find().sort({ createdAt: -1 });
+    res.json(deposits);
+});
+
+app.get("/api/admin/orders", adminAuth, async (req, res) => {
+    const orders = await Order.find().sort({ createdAt: -1 });
+    res.json(orders);
+});
+
+// Manual Balance Update
+app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
     try {
-        const { event_type, data } = req.body;
-        if (event_type === "payment.completed") {
-            const transaction = data.transaction;
-            const rawPhone = transaction.mobile_number;
-            
-            let searchPhone = String(rawPhone || "");
-            if (searchPhone.startsWith("254")) searchPhone = searchPhone.substring(3);
-            if (searchPhone.startsWith("0")) searchPhone = searchPhone.substring(1);
+        const { userId, amount } = req.body;
+        await User.findByIdAndUpdate(userId, { balance: amount });
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
-            const user = await User.findOne({ phone: { $regex: searchPhone } });
-
-            if (user) {
-                const transCode = transaction.reference || data.MpesaReceiptNumber;
-                const existingDeposit = await Deposit.findOne({ transactionCode: transCode });
-
-                if (!existingDeposit) {
-                    const depositAmount = Number(transaction.amount);
-                    await Deposit.create({
-                        userId: user._id,
-                        userEmail: user.email,
-                        phone: user.phone,
-                        amount: depositAmount,
-                        transactionCode: transCode,
-                        status: "completed"
-                    });
-                    user.balance += depositAmount;
-                    await user.save();
-                    log(`💰 Webhook: Credited KES ${depositAmount} to ${user.email}`);
-                }
-            }
+// Approve Manual/Failed Deposit
+app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
+    try {
+        const dep = await Deposit.findById(req.body.depositId);
+        if (dep && dep.status !== "completed") {
+            const user = await User.findById(dep.userId);
+            user.balance += dep.amount;
+            dep.status = "completed";
+            await user.save();
+            await dep.save();
+            return res.json({ success: true });
         }
-    } catch (err) {
-        log(`❌ Webhook Error: ${err.message}`);
-    }
+        res.status(400).json({ error: "Invalid deposit" });
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 /**
  * =========================================
- * PAYNECTA ENDPOINTS
- * =========================================
- */
-
-// Initialize STK Push - Support both "phone" and "mobile_number" from frontend
-app.post("/api/paynecta/stkpush", auth, async (req, res) => {
-    try {
-        const { amount } = req.body;
-        // Accept both common key names to prevent connection errors
-        const phone = req.body.phone || req.body.mobile_number;
-        
-        if (!amount || !phone) {
-            return res.status(400).json({ success: false, error: "Amount and phone number are required" });
-        }
-
-        const payload = {
-            amount: Number(amount),
-            mobile_number: formatKenyaPhone(phone),
-            code: "STK",
-            reference: "UNAS_" + Date.now()
-        };
-
-        const response = await axios.post(`${PAYNECTA_BASE_URL}/payment/initialize`, payload, {
-            headers: { 
-                "Content-Type": "application/json", 
-                "X-API-Key": process.env.PAYNECTA_API_KEY, 
-                "X-User-Email": ADMIN_EMAIL 
-            }
-        });
-
-        res.json({ success: true, data: response.data });
-    } catch (error) {
-        const errMsg = error.response?.data?.message || "Payment service unavailable";
-        log(`❌ STK Init Error: ${errMsg}`);
-        res.status(500).json({ success: false, error: errMsg });
-    }
-});
-
-app.get("/api/paynecta/status", auth, async (req, res) => {
-    try {
-        const { transaction_reference } = req.query;
-        if (!transaction_reference) return res.status(400).json({ success: false, error: "Reference required" });
-
-        const response = await axios.get(`${PAYNECTA_BASE_URL}/payment/status`, {
-            params: { transaction_reference },
-            headers: { 
-                "X-API-Key": process.env.PAYNECTA_API_KEY, 
-                "X-User-Email": ADMIN_EMAIL 
-            }
-        });
-        res.json(response.data);
-    } catch (error) {
-        res.status(400).json({ success: false, message: "Status check failed" });
-    }
-});
-
-/**
- * =========================================
- * USER ACCOUNT ENDPOINTS
- * =========================================
- */
-app.post("/api/register", async (req, res) => {
-    try {
-        const { username, email, password, phone, referralCode } = req.body;
-        const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }, { username: username?.toLowerCase() }] });
-        if (exists) return res.status(400).json({ error: "Account already exists" });
-
-        await User.create({
-            username: username?.toLowerCase(),
-            email: email?.toLowerCase(),
-            password,
-            phone,
-            referralCode: generateReferralCode(),
-            referredBy: referralCode || null,
-            balance: 0
-        });
-        res.json({ success: true, message: "Registration successful" });
-    } catch (err) {
-        res.status(500).json({ error: "Registration failed" });
-    }
-});
-
-app.post("/api/login", async (req, res) => {
-    try {
-        const { identifier, password } = req.body;
-        const user = await User.findOne({
-            $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }],
-            password
-        });
-        if (!user) return res.status(400).json({ error: "Invalid credentials" });
-
-        const token = jwt.sign({ id: user._id, email: user.email, username: user.username, phone: user.phone }, process.env.JWT_SECRET, { expiresIn: "7d" });
-        res.json({ token, balance: user.balance });
-    } catch (err) {
-        res.status(500).json({ error: "Login failed" });
-    }
-});
-
-app.get("/api/me", auth, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select("-password");
-        res.json(user);
-    } catch (err) {
-        res.status(500).json({ error: "Error fetching profile" });
-    }
-});
-
-/**
- * =========================================
- * SERVICES & ORDERS
+ * SERVICES & SYNC (DELIX)
  * =========================================
  */
 app.get("/api/services", async (req, res) => {
     try {
-        const forceRefresh = req.query.refresh === "true";
+        const refresh = req.query.refresh === "true";
         let services = await Service.find();
 
-        if (!services.length || forceRefresh) {
-            const response = await axios.get(`https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`);
-            const list = Array.isArray(response.data) ? response.data : [];
+        if (refresh || services.length === 0) {
+            const resp = await axios.get(`https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`);
+            const list = Array.isArray(resp.data) ? resp.data : [];
 
             if (list.length > 0) {
                 await Service.deleteMany({});
                 const mapped = list.map(s => ({
                     serviceId: String(s.service),
-                    name: cleanServiceName(s.name),
-                    rate: Number(s.rate || 0),
-                    min: Number(s.min || 1),
-                    max: Number(s.max || 10000),
-                    category: s.category || "General",
-                    platform: detectPlatform(s),
-                    provider: "DELIXGAINS"
+                    name: s.name,
+                    rate: Number(s.rate),
+                    min: Number(s.min),
+                    max: Number(s.max),
+                    category: s.category,
+                    platform: detectPlatform(s.name, s.category),
+                    provider: "DELIX"
                 }));
                 await Service.insertMany(mapped);
                 services = await Service.find();
             }
         }
 
+        // Apply Markups
         const grouped = {};
         services.forEach(s => {
-            const p = s.platform;
-            const c = s.category;
-            if (!grouped[p]) grouped[p] = {};
-            if (!grouped[p][c]) grouped[p][c] = [];
-            grouped[p][c].push({ ...s.toObject(), rate: applyFinalPrice(s.rate, s.name) });
+            if (!grouped[s.platform]) grouped[s.platform] = {};
+            if (!grouped[s.platform][s.category]) grouped[s.platform][s.category] = [];
+            grouped[s.platform][s.category].push({
+                ...s.toObject(),
+                rate: applyFinalPrice(s.rate, s.name)
+            });
         });
         res.json({ success: true, data: grouped });
-    } catch (err) {
-        res.status(500).json({ error: "Failed to load services" });
-    }
-});
-
-app.post("/api/order", auth, async (req, res) => {
-    try {
-        const { serviceId, link, quantity } = req.body;
-        const service = await Service.findOne({ serviceId });
-        if (!service) return res.status(404).json({ error: "Service unavailable" });
-
-        const user = await User.findById(req.user.id);
-        const totalCost = (applyFinalPrice(service.rate, service.name) / 1000) * Number(quantity);
-
-        if (user.balance < totalCost) return res.status(400).json({ error: "Insufficient balance" });
-
-        const providerRes = await axios.get(`https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`);
-
-        if (providerRes.data && providerRes.data.order) {
-            const order = await Order.create({
-                userId: user._id, userEmail: user.email, serviceId, serviceName: service.name,
-                orderId: String(providerRes.data.order), link, quantity, cost: totalCost, status: "pending"
-            });
-            user.balance -= totalCost;
-            await user.save();
-            await giveReferralBonus(user._id, totalCost);
-            res.json({ success: true, orderId: order.orderId, newBalance: user.balance.toFixed(2) });
-        } else {
-            res.status(400).json({ error: "Provider error." });
-        }
-    } catch (err) {
-        res.status(500).json({ error: "Order failed." });
-    }
+    } catch (e) { res.status(500).json({ error: "Service sync failed" }); }
 });
 
 /**
  * =========================================
- * ADMIN & STATIC ROUTES
+ * ORDERING SYSTEM
  * =========================================
  */
-const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "dashboard"];
-pages.forEach(p => app.get(`/${p}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${p}.html`))));
+app.post("/api/order", auth, async (req, res) => {
+    try {
+        const { serviceId, link, quantity } = req.body;
+        const service = await Service.findOne({ serviceId });
+        const user = await User.findById(req.user.id);
+        
+        const price = (applyFinalPrice(service.rate, service.name) / 1000) * quantity;
+        if (user.balance < price) return res.status(400).json({ error: "Top up your wallet" });
 
-app.get("/admin", adminAuth, (req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));
+        const provider = await axios.get(`https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${link}&quantity=${quantity}`);
+
+        if (provider.data && provider.data.order) {
+            await Order.create({
+                userId: user._id,
+                userEmail: user.email,
+                serviceId,
+                serviceName: service.name,
+                orderId: provider.data.order,
+                link,
+                quantity,
+                cost: price,
+                status: "Pending"
+            });
+            user.balance -= price;
+            await user.save();
+            res.json({ success: true, newBalance: user.balance });
+        } else {
+            res.status(400).json({ error: "Provider busy. Try later." });
+        }
+    } catch (e) { res.status(500).json({ error: "Ordering failed" }); }
+});
+
+app.get("/api/my-orders", auth, async (req, res) => {
+    const orders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
+    res.json(orders);
+});
+
+/**
+ * =========================================
+ * PAYMENT & WEBHOOKS
+ * =========================================
+ */
+app.post("/api/paynecta/stkpush", auth, async (req, res) => {
+    try {
+        const { amount, phone } = req.body;
+        const response = await axios.post(`${PAYNECTA_BASE_URL}/payment/initialize`, {
+            amount: Number(amount),
+            mobile_number: phone,
+            code: "STK",
+            reference: "UNAS_" + Date.now()
+        }, {
+            headers: { "X-API-Key": process.env.PAYNECTA_API_KEY, "X-User-Email": ADMIN_EMAIL }
+        });
+        res.json({ success: true, data: response.data });
+    } catch (e) { res.status(500).json({ error: "STK Push failed" }); }
+});
+
+app.post("/api/paynecta/webhook", async (req, res) => {
+    const { event_type, data } = req.body;
+    if (event_type === "payment.completed") {
+        const tx = data.transaction;
+        const user = await User.findOne({ phone: { $regex: tx.mobile_number.slice(-9) } });
+        if (user) {
+            const exists = await Deposit.findOne({ transactionCode: tx.reference });
+            if (!exists) {
+                user.balance += Number(tx.amount);
+                await Deposit.create({
+                    userId: user._id,
+                    userEmail: user.email,
+                    amount: tx.amount,
+                    transactionCode: tx.reference,
+                    status: "completed"
+                });
+                await user.save();
+            }
+        }
+    }
+    res.sendStatus(200);
+});
+
+/**
+ * =========================================
+ * AUTH & USER ROUTES
+ * =========================================
+ */
+app.post("/api/register", async (req, res) => {
+    try {
+        const { username, email, password, phone } = req.body;
+        const exists = await User.findOne({ email });
+        if (exists) return res.status(400).json({ error: "User exists" });
+        await User.create({ username, email, password, phone, balance: 0 });
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: "Error" }); }
+});
+
+app.post("/api/login", async (req, res) => {
+    const user = await User.findOne({ email: req.body.identifier, password: req.body.password });
+    if (!user) return res.status(400).json({ error: "Invalid" });
+    const token = jwt.sign({ id: user._id, email: user.email, phone: user.phone }, process.env.JWT_SECRET);
+    res.json({ token, balance: user.balance });
+});
+
+app.get("/api/me", auth, async (req, res) => {
+    const user = await User.findById(req.user.id).select("-password");
+    res.json(user);
+});
+
+// UI Routes
+const pages = ["home", "dashboard", "my-orders", "admin", "add-funds", "services"];
+pages.forEach(p => app.get(`/${p}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${p}.html`))));
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "home.html")));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA - Online on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Port: ${PORT}`));
