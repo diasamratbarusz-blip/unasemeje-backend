@@ -6,6 +6,37 @@ const router = express.Router();
 
 /**
  * =========================================
+ * GET ME (CHANNELS DATA TO ADD FUNDS PAGE)
+ * =========================================
+ * Frontend looks for `${API_URL}/me` to load balance and profiles instantly.
+ */
+router.get("/me", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Returns structural keys directly mapped to your frontend layout logic
+    res.json({
+      username: user.username || user.name || "User Profile",
+      email: user.email,
+      balance: user.balance || 0,
+      paymentProfileName: user.paymentProfileName || null,
+      paymentProfileEmail: user.paymentProfileEmail || null,
+      paymentPhone1: user.paymentPhone1 || null,
+      paymentPhone2: user.paymentPhone2 || null,
+      paymentPhone3: user.paymentPhone3 || null
+    });
+  } catch (err) {
+    console.error("GET ME ERROR:", err.message);
+    res.status(500).json({ error: "Failed to fetch dashboard user details" });
+  }
+});
+
+/**
+ * =========================================
  * GET BALANCE
  * =========================================
  */
