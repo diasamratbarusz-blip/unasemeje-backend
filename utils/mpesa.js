@@ -1,6 +1,12 @@
 const axios = require("axios");
 
 /**
+ * =========================================================================
+ * 1. SAFARICOM DIRECT MPESA FUNCTIONS
+ * =========================================================================
+ */
+
+/**
  * GENERATE MPESA ACCESS TOKEN
  * Switches to production URL for live payments
  */
@@ -79,4 +85,51 @@ async function stkPush(phone, amount) {
   }
 }
 
-module.exports = { stkPush };
+/**
+ * =========================================================================
+ * 2. PAYNECTA PAYMENT LINK STATUS VERIFICATION
+ * =========================================================================
+ */
+
+/**
+ * CHECK PAYNECTA TRANSACTION STATUS
+ * This function hits Paynecta to verify if a user's payment reference is actually completed.
+ * 
+ * @param {string} transactionReference - The reference code from the payment link (e.g., ABCP20240803123456ABCD)
+ * @returns {Promise<Object>} - The payment data if successful
+ */
+async function checkPaymentStatus(transactionReference) {
+  try {
+    // Ensure critical API details are present in environment variables
+    if (!process.env.PAYNECTA_API_KEY || !process.env.PAYNECTA_EMAIL) {
+      throw new Error("Missing PAYNECTA_API_KEY or PAYNECTA_EMAIL in server environment variables.");
+    }
+
+    const response = await axios.get("https://paynecta.co.ke/api/v1/payment/status", {
+      params: {
+        transaction_reference: transactionReference
+      },
+      headers: {
+        "X-API-Key": process.env.PAYNECTA_API_KEY,
+        "X-User-Email": process.env.PAYNECTA_EMAIL
+      }
+    });
+
+    // Check if Paynecta successfully responded with data
+    if (response.data && response.data.success) {
+      return response.data.data; // This returns the inner "data" object containing status, amount, mpesa_receipt_number, etc.
+    } else {
+      throw new Error(response.data?.message || "Failed to retrieve transaction status from Paynecta.");
+    }
+
+  } catch (error) {
+    console.error("❌ Paynecta Status Verification Error:", error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// Export all functionalities so they are fully available to your server routes
+module.exports = { 
+  stkPush,
+  checkPaymentStatus 
+};
