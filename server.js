@@ -201,54 +201,67 @@ function applyFinalPrice(originalRate, name) {
 
 /**
  * =========================================
- * PAYNECTA WEBHOOK (UPDATED FOR MULTI-PHONE)
+ * PAYNECTA WEBHOOK (SMART PHONE MATCHING)
  * =========================================
  */
 app.post("/api/paynecta/webhook", async (req, res) => {
+    // Immediate 200 response to Paynecta to prevent timeouts
     res.status(200).send("Webhook received");
+
     try {
         const event = req.body;
         const { event_type, data } = event;
         const transaction = data?.transaction || {};
 
-        const phone = transaction.mobile_number || data?.PhoneNumber || data?.phone;
+        // Extract phone number from any possible field Paynecta might send
+        let phone = transaction.mobile_number || data?.PhoneNumber || data?.phone;
 
         if (event_type === "payment.completed" && phone) {
-            let searchPhone = String(phone).replace(/\s+/g, '');
+            // 1. Remove all spaces and "+" signs
+            let cleanPhone = String(phone).replace(/[\s+]/g, '');
 
-            // Clean phone for regex matching
-            let regexPhone = searchPhone;
-            if (regexPhone.startsWith("0")) regexPhone = regexPhone.substring(1);
-            if (regexPhone.startsWith("254")) regexPhone = regexPhone.substring(3);
+            // 2. Get the "Core" number (e.g., 715509440 or 115...)
+            // This removes leading 0 or 254 so we can match any format in DB
+            let corePhone = cleanPhone;
+            if (corePhone.startsWith("254")) corePhone = corePhone.substring(3);
+            if (corePhone.startsWith("0")) corePhone = corePhone.substring(1);
 
-            // Find user where phone matches primary OR any of the 3 payment profile slots
+            console.log(`[Webhook] Processing payment for Core Phone: ${corePhone}`);
+
+            // 3. Find User using Regex on core digits
             const user = await User.findOne({
                 $or: [
-                    { phone: { $regex: regexPhone } },
-                    { paymentPhone1: searchPhone },
-                    { paymentPhone2: searchPhone },
-                    { paymentPhone3: searchPhone }
+                    { phone: { $regex: corePhone } },
+                    { paymentPhone1: { $regex: corePhone } },
+                    { paymentPhone2: { $regex: corePhone } },
+                    { paymentPhone3: { $regex: corePhone } }
                 ]
             });
 
             if (user) {
-                const transCode = data?.MpesaReceiptNumber || transaction.reference || crypto.randomBytes(4).toString("hex");
+                const transCode = data?.MpesaReceiptNumber || transaction.reference || `TRX-${Date.now()}`;
                 const existingDeposit = await Deposit.findOne({ transactionCode: transCode });
 
                 if (!existingDeposit) {
+                    const amount = Number(transaction.amount || 0);
+                    
                     await Deposit.create({
                         userId: user._id,
                         userEmail: user.email,
-                        phone: searchPhone,
-                        amount: Number(transaction.amount || 0),
+                        phone: cleanPhone,
+                        amount: amount,
                         transactionCode: transCode,
                         status: "completed"
                     });
 
-                    user.balance += Number(transaction.amount || 0);
+                    user.balance += amount;
                     await user.save();
-                    log(`Deposit Successful: ${user.email} - KES ${transaction.amount} via ${searchPhone}`);
+                    log(`Deposit Success: ${user.username} | Amount: ${amount} | TRX: ${transCode}`);
+                } else {
+                    console.log(`[Webhook] Duplicate Transaction Code: ${transCode}`);
                 }
+            } else {
+                console.log(`[Webhook] No user found matching phone core: ${corePhone}`);
             }
         }
     } catch (err) {
@@ -264,7 +277,7 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 app.post("/api/user/update-payment-profile", auth, async (req, res) => {
     try {
         const { name, email, phones } = req.body;
-        const updatedUser = await User.findByIdAndUpdate(req.user.id, {
+        await User.findByIdAndUpdate(req.user.id, {
             $set: {
                 paymentProfileName: name,
                 paymentProfileEmail: email,
@@ -272,7 +285,7 @@ app.post("/api/user/update-payment-profile", auth, async (req, res) => {
                 paymentPhone2: phones[1] || null,
                 paymentPhone3: phones[2] || null
             }
-        }, { new: true });
+        });
         res.json({ success: true, message: "Payment channels synchronized." });
     } catch (err) {
         res.status(500).json({ error: "Failed to update profile." });
@@ -295,66 +308,39 @@ app.get("/api/paynecta/verify", auth, async (req, res) => {
         });
         res.json(response.data);
     } catch (error) {
-        res.status(400).json({ success: false, message: "Verification failed", error: error.response?.data || error.message });
+        res.status(400).json({ success: false, error: error.message });
     }
 });
 
 app.post("/api/paynecta/stkpush", auth, async (req, res) => {
     try {
         let { amount, phone } = req.body;
-        if (!amount || !phone) return res.status(400).json({ success: false, error: "Amount and phone are required" });
-        phone = String(phone).replace(/\D/g, "");
-        if (phone.startsWith("0")) phone = "254" + phone.substring(1);
-        if (phone.startsWith("7")) phone = "254" + phone;
+        if (!amount || !phone) return res.status(400).json({ error: "Data missing" });
+        
+        let formatted = String(phone).replace(/\D/g, "");
+        if (formatted.startsWith("0")) formatted = "254" + formatted.substring(1);
+        if (formatted.startsWith("7") || formatted.startsWith("1")) formatted = "254" + formatted;
 
         const response = await axios.post(`${PAYNECTA_BASE_URL}/payment/initialize`, 
-            { amount: Number(amount), mobile_number: phone, code: "600" },
-            { headers: { "Content-Type": "application/json", "X-API-Key": process.env.PAYNECTA_API_KEY, "X-User-Email": ADMIN_EMAIL }}
+            { amount: Number(amount), mobile_number: formatted, code: "600" },
+            { headers: { "X-API-Key": process.env.PAYNECTA_API_KEY, "X-User-Email": ADMIN_EMAIL }}
         );
-        res.json({ success: true, message: "STK Push sent successfully", data: response.data });
+        res.json({ success: true, data: response.data });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.response?.data?.message || "Failed to send STK push" });
+        res.status(500).json({ error: "STK push failed" });
     }
 });
 
-app.post("/api/paynecta/initialize", auth, async (req, res) => {
-    try {
-        const { code, amount, mobile_number } = req.body;
-        let formattedPhone = String(mobile_number);
-        if (formattedPhone.startsWith("0")) formattedPhone = "254" + formattedPhone.substring(1);
-        if (!formattedPhone.startsWith("254")) formattedPhone = "254" + formattedPhone;
-
-        const response = await axios.post(`${PAYNECTA_BASE_URL}/payment/initialize`,
-            { code: code || "600", amount, mobile_number: formattedPhone },
-            { headers: { "X-API-Key": process.env.PAYNECTA_API_KEY, "X-User-Email": ADMIN_EMAIL, "Content-Type": "application/json" }}
-        );
-        res.status(response.status).json(response.data);
-    } catch (error) {
-        res.status(error.response?.status || 500).json(error.response?.data || { error: "Payment initiation failed" });
-    }
-});
-
-// NEW: Paynecta Transaction Status Endpoint
 app.get("/api/paynecta/status", auth, async (req, res) => {
     try {
         const { transaction_reference } = req.query;
-        if (!transaction_reference) {
-            return res.status(400).json({ success: false, message: "Transaction reference is required" });
-        }
-
         const response = await axios.get(`${PAYNECTA_BASE_URL}/payment/status`, {
             params: { transaction_reference },
-            headers: { 
-                "X-API-Key": process.env.PAYNECTA_API_KEY, 
-                "X-User-Email": ADMIN_EMAIL 
-            }
+            headers: { "X-API-Key": process.env.PAYNECTA_API_KEY, "X-User-Email": ADMIN_EMAIL }
         });
         res.json(response.data);
     } catch (error) {
-        res.status(error.response?.status || 400).json({ 
-            success: false, 
-            message: error.response?.data?.message || "Could not retrieve status" 
-        });
+        res.status(400).json({ error: "Status check failed" });
     }
 });
 
@@ -366,8 +352,8 @@ app.get("/api/paynecta/status", auth, async (req, res) => {
 app.post("/api/register", async (req, res) => {
     try {
         const { username, email, password, phone, referralCode } = req.body;
-        const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }, { username: username?.toLowerCase() }] });
-        if (exists) return res.status(400).json({ error: "Account already exists" });
+        const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }] });
+        if (exists) return res.status(400).json({ error: "User exists" });
 
         await User.create({
             username: username?.toLowerCase(),
@@ -378,9 +364,9 @@ app.post("/api/register", async (req, res) => {
             referredBy: referralCode || null,
             balance: 0
         });
-        res.json({ success: true, message: "Registration successful" });
+        res.json({ success: true });
     } catch (err) {
-        res.status(500).json({ error: "Registration failed" });
+        res.status(500).json({ error: "Register failed" });
     }
 });
 
@@ -391,9 +377,9 @@ app.post("/api/login", async (req, res) => {
             $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }],
             password
         });
-        if (!user) return res.status(400).json({ error: "Invalid credentials" });
+        if (!user) return res.status(400).json({ error: "Invalid login" });
 
-        const token = jwt.sign({ id: user._id, email: user.email, username: user.username, phone: user.phone }, process.env.JWT_SECRET, { expiresIn: "7d" });
+        const token = jwt.sign({ id: user._id, email: user.email, phone: user.phone }, process.env.JWT_SECRET, { expiresIn: "7d" });
         res.json({ token, balance: user.balance });
     } catch (err) {
         res.status(500).json({ error: "Login failed" });
@@ -401,29 +387,21 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.get("/api/me", auth, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select("-password");
-        res.json(user);
-    } catch (err) {
-        res.status(500).json({ error: "Error fetching profile" });
-    }
+    const user = await User.findById(req.user.id).select("-password");
+    res.json(user);
 });
 
 /**
  * =========================================
- * SERVICES
+ * SMM SERVICES & ORDERS
  * =========================================
  */
 app.get("/api/services", async (req, res) => {
     try {
-        const forceRefresh = req.query.refresh === "true";
         let services = await Service.find();
-
-        if (!services.length || forceRefresh) {
-            const url = `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`;
-            const response = await axios.get(url);
+        if (!services.length || req.query.refresh === "true") {
+            const response = await axios.get(`https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`);
             const list = Array.isArray(response.data) ? response.data : [];
-
             if (list.length > 0) {
                 await Service.deleteMany({});
                 const mapped = list.map(s => ({
@@ -433,186 +411,102 @@ app.get("/api/services", async (req, res) => {
                     min: Number(s.min || 1),
                     max: Number(s.max || 10000),
                     category: s.category || "General",
-                    platform: detectPlatform(s),
-                    provider: "DELIXGAINS"
+                    platform: detectPlatform(s)
                 }));
                 await Service.insertMany(mapped);
                 services = await Service.find();
             }
         }
-
         const grouped = {};
         services.forEach(s => {
-            const p = s.platform;
-            const c = s.category;
-            if (!grouped[p]) grouped[p] = {};
-            if (!grouped[p][c]) grouped[p][c] = [];
-            grouped[p][c].push({ ...s.toObject(), rate: applyFinalPrice(s.rate, s.name) });
+            if (!grouped[s.platform]) grouped[s.platform] = {};
+            if (!grouped[s.platform][s.category]) grouped[s.platform][s.category] = [];
+            grouped[s.platform][s.category].push({ ...s.toObject(), rate: applyFinalPrice(s.rate, s.name) });
         });
         res.json({ success: true, data: grouped });
     } catch (err) {
-        res.status(500).json({ error: "Failed to load services" });
+        res.status(500).json({ error: "Service error" });
     }
 });
 
-/**
- * =========================================
- * PLACE ORDER
- * =========================================
- */
 app.post("/api/order", auth, async (req, res) => {
     try {
         const { serviceId, link, quantity } = req.body;
         const service = await Service.findOne({ serviceId });
-        if (!service) return res.status(404).json({ error: "Service unavailable" });
-
         const user = await User.findById(req.user.id);
-        const totalCost = (applyFinalPrice(service.rate, service.name) / 1000) * Number(quantity);
+        const cost = (applyFinalPrice(service.rate, service.name) / 1000) * Number(quantity);
 
-        if (user.balance < totalCost) return res.status(400).json({ error: "Insufficient balance" });
+        if (user.balance < cost) return res.status(400).json({ error: "Low balance" });
 
-        const providerRes = await axios.get(`https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`);
+        const pRes = await axios.get(`https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`);
 
-        if (providerRes.data && providerRes.data.order) {
-            const order = await Order.create({
+        if (pRes.data?.order) {
+            await Order.create({
                 userId: user._id, userEmail: user.email, serviceId, serviceName: service.name,
-                orderId: String(providerRes.data.order), link, quantity, cost: totalCost, status: "pending"
+                orderId: String(pRes.data.order), link, quantity, cost, status: "pending"
             });
-            user.balance -= totalCost;
+            user.balance -= cost;
             await user.save();
-            await giveReferralBonus(user._id, totalCost);
-            res.json({ success: true, orderId: order.orderId, newBalance: user.balance.toFixed(2) });
+            await giveReferralBonus(user._id, cost);
+            res.json({ success: true, newBalance: user.balance });
         } else {
-            res.status(400).json({ error: "Provider error." });
+            res.status(400).json({ error: "SMM Provider error" });
         }
     } catch (err) {
-        res.status(500).json({ error: "Order failed." });
+        res.status(500).json({ error: "Order failed" });
     }
 });
 
-/**
- * =========================================
- * SYNC ORDERS
- * =========================================
- */
 app.get("/api/sync-orders", auth, async (req, res) => {
-    try {
-        const activeOrders = await Order.find({ userId: req.user.id, status: { $nin: ["completed", "canceled", "partial"] } });
-        if (activeOrders.length > 0) {
-            const ids = activeOrders.map(o => o.orderId).join(",");
-            const url = `https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&orders=${ids}`;
-            const response = await axios.get(url);
-            for (let orderId in response.data) {
-                const data = response.data[orderId];
-                if (data?.status) {
-                    await Order.findOneAndUpdate({ orderId }, { status: data.status.toLowerCase() });
-                }
-            }
+    const active = await Order.find({ userId: req.user.id, status: "pending" });
+    if (active.length) {
+        const ids = active.map(o => o.orderId).join(",");
+        const resObj = await axios.get(`https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=status&orders=${ids}`);
+        for (let id in resObj.data) {
+            await Order.findOneAndUpdate({ orderId: id }, { status: resObj.data[id].status.toLowerCase() });
         }
-        const updated = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-        res.json(updated);
-    } catch (err) {
-        res.status(500).json({ error: "Failed to sync orders" });
     }
+    const updated = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
+    res.json(updated);
 });
 
 /**
  * =========================================
- * MANUAL DEPOSIT
+ * DEPOSITS & ADMIN
  * =========================================
  */
 app.post("/api/deposit", auth, async (req, res) => {
-    try {
-        const { amount, transactionCode } = req.body;
-        const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
-        if (exists) return res.status(400).json({ error: "Code already submitted" });
-
-        await Deposit.create({
-            userId: req.user.id, userEmail: req.user.email, phone: req.user.phone,
-            amount: Number(amount), transactionCode: transactionCode.toUpperCase(), status: "pending"
-        });
-        res.json({ success: true, message: "Verification pending" });
-    } catch (error) {
-        res.status(500).json({ error: "Submission failed" });
-    }
+    const { amount, transactionCode } = req.body;
+    const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
+    if (exists) return res.status(400).json({ error: "Exists" });
+    await Deposit.create({ userId: req.user.id, userEmail: req.user.email, amount, transactionCode: transactionCode.toUpperCase(), status: "pending" });
+    res.json({ success: true });
 });
 
-/**
- * =========================================
- * ADMIN ENDPOINTS
- * =========================================
- */
-app.get("/api/admin/users", adminAuth, async (req, res) => {
-    const users = await User.find().select("-password");
-    res.json(users);
-});
-
-app.get("/api/admin/deposits", adminAuth, async (req, res) => {
-    const deposits = await Deposit.find().sort({ createdAt: -1 });
-    res.json(deposits);
-});
-
-app.get("/api/admin/orders", adminAuth, async (req, res) => {
-    const orders = await Order.find().sort({ createdAt: -1 });
-    res.json(orders);
-});
+app.get("/api/admin/users", adminAuth, async (req, res) => res.json(await User.find().select("-password")));
+app.get("/api/admin/deposits", adminAuth, async (req, res) => res.json(await Deposit.find().sort({ createdAt: -1 })));
 
 app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
-    try {
-        const { depositId } = req.body;
-        const dep = await Deposit.findById(depositId);
-        if (!dep || dep.status !== "pending") return res.status(400).json({ error: "Invalid deposit" });
-
+    const dep = await Deposit.findById(req.body.depositId);
+    if (dep && dep.status === "pending") {
         const user = await User.findById(dep.userId);
         user.balance += dep.amount;
         dep.status = "completed";
         await user.save();
         await dep.save();
         res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ error: "Approval failed" });
-    }
-});
-
-app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
-    try {
-        const { userId, amount } = req.body;
-        const user = await User.findById(userId);
-        if (!user) return res.status(404).json({ error: "User not found" });
-        user.balance += Number(amount);
-        await user.save();
-        res.json({ success: true, balance: user.balance });
-    } catch (err) {
-        res.status(500).json({ error: "Update failed" });
     }
 });
 
 /**
  * =========================================
- * STATIC ROUTES
+ * STATIC ROUTES & SERVER
  * =========================================
  */
-const pagesList = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "dashboard"];
-pagesList.forEach(page => {
-    app.get(`/${page}`, (req, res) => {
-        res.sendFile(path.join(__dirname, "public", `${page}.html`));
-    });
-});
+const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "dashboard"];
+pages.forEach(p => app.get(`/${p}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${p}.html`))));
+app.get("/admin", adminAuth, (req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "home.html")));
 
-app.get("/admin", adminAuth, (req, res) => {
-    res.sendFile(path.join(__dirname, "public", "admin.html"));
-});
-
-app.get("/", (req, res) => {
-    res.sendFile(path.join(__dirname, "public", "home.html"));
-});
-
-/**
- * =========================================
- * SERVER START
- * =========================================
- */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 UNASEMEJE ø DIA - Online on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA ONLINE ON PORT ${PORT}`));
