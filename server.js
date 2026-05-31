@@ -36,11 +36,13 @@ const app = express();
  */
 app.use(cors({
     origin: function (origin, callback) {
+        // Updated to include your live Vercel domain and potential local testing ports
         const allowedOrigins = [
             "https://unasemeje-frontend.vercel.app",
             "http://localhost:3000",
             "http://localhost:5000",
-            "http://localhost:3001"
+            "http://localhost:3001",
+            "http://127.0.0.1:5500"
         ];
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
@@ -276,7 +278,9 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 const handleProfileUpdate = async (req, res) => {
     try {
         const { name, email, phones } = req.body;
-        const cleanPhones = (phones || []).map(p => p.replace(/\s/g, ''));
+        
+        // Clean formatting for the database to ensure webhook matches work perfectly
+        const cleanPhones = (phones || []).map(p => typeof p === 'string' ? p.replace(/[\s+-]/g, '') : p);
 
         const updatedUser = await User.findByIdAndUpdate(
             req.user.id, 
@@ -289,21 +293,27 @@ const handleProfileUpdate = async (req, res) => {
                     paymentPhone3: cleanPhones[2] || null
                 }
             },
-            { new: true }
+            { new: true, runValidators: true }
         );
 
         if (!updatedUser) return res.status(404).json({ error: "User not found." });
 
         res.json({ 
             success: true, 
-            message: "Payment channels synchronized to your permanent storage." 
+            message: "Payment channels synchronized to your permanent storage.",
+            profile: {
+                name: updatedUser.paymentProfileName,
+                email: updatedUser.paymentProfileEmail,
+                phones: [updatedUser.paymentPhone1, updatedUser.paymentPhone2, updatedUser.paymentPhone3].filter(Boolean)
+            }
         });
     } catch (err) {
-        console.error("Update Profile Error:", err);
+        console.error("Update Profile Error:", err.message);
         res.status(500).json({ error: "Failed to update your permanent payment profile." });
     }
 };
 
+// Aliased routes to handle both potential frontend call styles
 app.post("/api/user/update-payment-profile", auth, handleProfileUpdate);
 app.post("/api/update-payment-profile", auth, handleProfileUpdate); 
 
