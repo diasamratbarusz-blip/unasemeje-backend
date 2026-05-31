@@ -205,7 +205,7 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 app.post("/api/paynecta/webhook", async (req, res) => {
-    // Immediate acknowledgement to Paynecta
+    // Immediate acknowledgement to Paynecta to stop retries
     res.status(200).send("Webhook processed");
 
     try {
@@ -213,19 +213,19 @@ app.post("/api/paynecta/webhook", async (req, res) => {
         const { event_type, data } = event;
         const transaction = data?.transaction || {};
 
-        // Extract phone number
+        // Extract phone number from multiple possible paths in the event object
         let phone = transaction.mobile_number || data?.PhoneNumber || data?.phone;
 
         if (event_type === "payment.completed" && phone) {
-            // Normalize phone for searching
+            // Normalize phone for searching (e.g., +2547... -> 7...)
             let cleanPhone = String(phone).replace(/[\s+]/g, '');
             let corePhone = cleanPhone;
             if (corePhone.startsWith("254")) corePhone = corePhone.substring(3);
             if (corePhone.startsWith("0")) corePhone = corePhone.substring(1);
 
-            console.log(`[Webhook] Auto-funding for Core Phone: ${corePhone}`);
+            console.log(`[Webhook] Payment Detected for Core Phone: ${corePhone}`);
 
-            // Find User using normalized phone across all possible fields
+            // Find User using normalized phone across all possible fields in User model
             const user = await User.findOne({
                 $or: [
                     { phone: { $regex: corePhone } },
@@ -238,20 +238,28 @@ app.post("/api/paynecta/webhook", async (req, res) => {
             if (user) {
                 const transCode = data?.MpesaReceiptNumber || transaction.reference || `TRX-${Date.now()}`;
                 
-                // Prevent double funding via transaction code check
-                const existingDeposit = await Deposit.findOne({ transactionCode: transCode });
+                // CRITICAL: Check both transactionCode AND code fields due to schema duplicates
+                const existingDeposit = await Deposit.findOne({ 
+                    $or: [
+                        { transactionCode: transCode },
+                        { code: transCode }
+                    ]
+                });
 
                 if (!existingDeposit) {
-                    const amount = Number(transaction.amount || 0);
+                    const amount = Number(transaction.amount || data?.amount || 0);
                     
-                    // Create deposit record
+                    // Create deposit record with source "stk" or "mpesa"
                     await Deposit.create({
                         userId: user._id,
                         userEmail: user.email,
                         phone: cleanPhone,
                         amount: amount,
                         transactionCode: transCode,
-                        status: "completed"
+                        code: transCode,
+                        source: "stk",
+                        status: "completed",
+                        message: `Automatic Funding via Paynecta Hook (${cleanPhone})`
                     });
 
                     // Update user balance immediately
@@ -263,7 +271,7 @@ app.post("/api/paynecta/webhook", async (req, res) => {
                     console.log(`[Webhook] Transaction ${transCode} already processed.`);
                 }
             } else {
-                console.log(`[Webhook] No user found for phone: ${corePhone}. Logged for manual check.`);
+                console.log(`[Webhook] No user profile found for phone: ${corePhone}.`);
             }
         }
     } catch (err) {
@@ -279,18 +287,21 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 app.post("/api/user/update-payment-profile", auth, async (req, res) => {
     try {
         const { name, email, phones } = req.body;
+        // Clean phones to ensure standard format (remove spaces)
+        const cleanPhones = (phones || []).map(p => p.replace(/\s/g, ''));
+
         await User.findByIdAndUpdate(req.user.id, {
             $set: {
                 paymentProfileName: name,
                 paymentProfileEmail: email,
-                paymentPhone1: phones[0] || null,
-                paymentPhone2: phones[1] || null,
-                paymentPhone3: phones[2] || null
+                paymentPhone1: cleanPhones[0] || null,
+                paymentPhone2: cleanPhones[1] || null,
+                paymentPhone3: cleanPhones[2] || null
             }
         });
-        res.json({ success: true, message: "Payment channels synchronized." });
+        res.json({ success: true, message: "Payment channels synchronized to your account." });
     } catch (err) {
-        res.status(500).json({ error: "Failed to update profile." });
+        res.status(500).json({ error: "Failed to update your permanent payment profile." });
     }
 });
 
@@ -389,8 +400,12 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.get("/api/me", auth, async (req, res) => {
-    const user = await User.findById(req.user.id).select("-password");
-    res.json(user);
+    try {
+        const user = await User.findById(req.user.id).select("-password");
+        res.json(user);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch profile." });
+    }
 });
 
 /**
@@ -490,7 +505,7 @@ app.get("/api/admin/deposits", adminAuth, async (req, res) => res.json(await Dep
 
 app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
     const dep = await Deposit.findById(req.body.depositId);
-    if (dep && dep.status === "pending") {
+    if (dep && (dep.status === "pending" || dep.status === "failed")) {
         const user = await User.findById(dep.userId);
         user.balance += dep.amount;
         dep.status = "completed";
