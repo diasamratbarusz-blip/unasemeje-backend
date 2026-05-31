@@ -63,13 +63,14 @@ const depositSchema = new mongoose.Schema(
     /* ================= FULL RAW MESSAGE ================= */
     message: {
       type: String,
-      required: true
+      default: "No raw message provided"
     },
 
     /* ================= STATUS ================= */
     status: {
       type: String,
-      enum: ["pending", "approved", "rejected", "failed"],
+      // UPDATED: Added "completed" to match the Webhook logic in server.js
+      enum: ["pending", "approved", "rejected", "failed", "completed"],
       default: "pending",
       index: true
     },
@@ -117,14 +118,21 @@ depositSchema.index({ userId: 1, createdAt: -1 });
 /* ================= MIDDLEWARE ================= */
 /**
  * Pre-save hook to ensure 'code' and 'transactionCode' are always identical.
- * This prevents null conflicts on unique indexes.
+ * This prevents null conflicts on unique indexes and ensures instant funding logic works.
  */
 depositSchema.pre("save", function (next) {
+  // Synchronize the two transaction code fields
   if (this.transactionCode && !this.code) {
     this.code = this.transactionCode;
   } else if (this.code && !this.transactionCode) {
     this.transactionCode = this.code;
   }
+  
+  // Set default message for STK/Webhook payments if not present
+  if (!this.message && this.source === "stk") {
+    this.message = `STK Deposit of ${this.amount} via ${this.phone}`;
+  }
+  
   next();
 });
 
