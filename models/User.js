@@ -67,7 +67,7 @@ const UserSchema = new mongoose.Schema(
 
     /* ================= DETECTED PAYMENT PROFILE ================= */
     /**
-     * Added fields to match the 'Add Funds' identity verification module.
+     * Fields used for the 'Add Funds' identity verification module.
      * This securely bridges incoming gateway webhooks to user accounts.
      */
     paymentProfileName: {
@@ -84,7 +84,10 @@ const UserSchema = new mongoose.Schema(
       index: true
     },
 
-    // 3 Explicit authorized funding boxes
+    /**
+     * Authorized M-PESA Funding Numbers
+     * These allow the system to recognize which user is paying via the webhook.
+     */
     paymentPhone1: {
       type: String,
       default: null,
@@ -107,9 +110,6 @@ const UserSchema = new mongoose.Schema(
     },
 
     /* ================= ROLE & SECURITY ================= */
-    /**
-     * Role determines backend route access via identity guard.
-     */
     role: {
       type: String,
       enum: ["user", "admin"],
