@@ -36,7 +36,10 @@ const depositSchema = new mongoose.Schema(
     },
 
     /* ================= M-PESA TRANSACTION ================= */
-    // Primary field for the transaction code (e.g., QRL71ABCDE)
+    /**
+     * Primary field for the transaction code (e.g., QRL71ABCDE).
+     * This is what the automated funding engine checks against.
+     */
     transactionCode: {
       type: String,
       unique: true,
@@ -47,9 +50,9 @@ const depositSchema = new mongoose.Schema(
     },
 
     /**
-     * FIX FOR E11000 ERROR:
-     * This 'code' field is maintained to match existing database indexes.
-     * The pre-save hook below ensures it mirrors transactionCode.
+     * FIX FOR E11000 INDEX ERROR:
+     * This field is maintained to mirror 'transactionCode'.
+     * By keeping both, we prevent crashes from old legacy data indexes.
      */
     code: {
       type: String,
@@ -69,7 +72,10 @@ const depositSchema = new mongoose.Schema(
     /* ================= STATUS ================= */
     status: {
       type: String,
-      // UPDATED: Added "completed" to match the Webhook logic in server.js
+      /**
+       * UPDATED: Added "completed" to allow direct funding from the 
+       * Paynecta Webhook without needing manual admin "approval".
+       */
       enum: ["pending", "approved", "rejected", "failed", "completed"],
       default: "pending",
       index: true
@@ -118,7 +124,8 @@ depositSchema.index({ userId: 1, createdAt: -1 });
 /* ================= MIDDLEWARE ================= */
 /**
  * Pre-save hook to ensure 'code' and 'transactionCode' are always identical.
- * This prevents null conflicts on unique indexes and ensures instant funding logic works.
+ * This prevents null conflicts on unique indexes and ensures instant funding 
+ * logic works regardless of which field the gateway sends.
  */
 depositSchema.pre("save", function (next) {
   // Synchronize the two transaction code fields
@@ -130,7 +137,12 @@ depositSchema.pre("save", function (next) {
   
   // Set default message for STK/Webhook payments if not present
   if (!this.message && this.source === "stk") {
-    this.message = `STK Deposit of ${this.amount} via ${this.phone}`;
+    this.message = `Automated STK Deposit of KES ${this.amount} for user ${this.userEmail}`;
+  }
+  
+  // Auto-set approvedAt if status is set to completed or approved
+  if ((this.status === "completed" || this.status === "approved") && !this.approvedAt) {
+    this.approvedAt = new Date();
   }
   
   next();
