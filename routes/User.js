@@ -99,6 +99,9 @@ router.post("/update-payment-profile", auth, async (req, res) => {
       return res.status(400).json({ error: "Name, Email, and Primary Phone are required." });
     }
 
+    // Clean whitespaces from incoming phone array to guarantee match precision for webhooks
+    const cleanPhones = (phones || []).map(p => typeof p === 'string' ? p.replace(/\s/g, '') : p);
+
     // Update the user document with the specific payment gateway channels
     const updatedUser = await User.findByIdAndUpdate(
       req.user.id,
@@ -106,9 +109,9 @@ router.post("/update-payment-profile", auth, async (req, res) => {
         $set: {
           paymentProfileName: name,
           paymentProfileEmail: email,
-          paymentPhone1: phones[0] || null,
-          paymentPhone2: phones[1] || null,
-          paymentPhone3: phones[2] || null
+          paymentPhone1: cleanPhones[0] || null,
+          paymentPhone2: cleanPhones[1] || null,
+          paymentPhone3: cleanPhones[2] || null
         }
       },
       { new: true, runValidators: true }
