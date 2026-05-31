@@ -205,7 +205,6 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 app.post("/api/paynecta/webhook", async (req, res) => {
-    // Immediate acknowledgement to Paynecta to stop retries
     res.status(200).send("Webhook processed");
 
     try {
@@ -213,11 +212,9 @@ app.post("/api/paynecta/webhook", async (req, res) => {
         const { event_type, data } = event;
         const transaction = data?.transaction || {};
 
-        // Extract phone number from multiple possible paths in the event object
         let phone = transaction.mobile_number || data?.PhoneNumber || data?.phone;
 
         if (event_type === "payment.completed" && phone) {
-            // Normalize phone for searching (e.g., +2547... -> 7...)
             let cleanPhone = String(phone).replace(/[\s+]/g, '');
             let corePhone = cleanPhone;
             if (corePhone.startsWith("254")) corePhone = corePhone.substring(3);
@@ -225,7 +222,6 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 
             console.log(`[Webhook] Payment Detected for Core Phone: ${corePhone}`);
 
-            // Find User using normalized phone across all possible fields in User model
             const user = await User.findOne({
                 $or: [
                     { phone: { $regex: corePhone } },
@@ -238,7 +234,6 @@ app.post("/api/paynecta/webhook", async (req, res) => {
             if (user) {
                 const transCode = data?.MpesaReceiptNumber || transaction.reference || `TRX-${Date.now()}`;
                 
-                // CRITICAL: Check both transactionCode AND code fields due to schema duplicates
                 const existingDeposit = await Deposit.findOne({ 
                     $or: [
                         { transactionCode: transCode },
@@ -249,7 +244,6 @@ app.post("/api/paynecta/webhook", async (req, res) => {
                 if (!existingDeposit) {
                     const amount = Number(transaction.amount || data?.amount || 0);
                     
-                    // Create deposit record with source "stk" or "mpesa"
                     await Deposit.create({
                         userId: user._id,
                         userEmail: user.email,
@@ -262,16 +256,11 @@ app.post("/api/paynecta/webhook", async (req, res) => {
                         message: `Automatic Funding via Paynecta Hook (${cleanPhone})`
                     });
 
-                    // Update user balance immediately
                     user.balance += amount;
                     await user.save();
                     
                     log(`INSTANT FUNDING: ${user.username} | +KES ${amount} | TRX: ${transCode}`);
-                } else {
-                    console.log(`[Webhook] Transaction ${transCode} already processed.`);
                 }
-            } else {
-                console.log(`[Webhook] No user profile found for phone: ${corePhone}.`);
             }
         }
     } catch (err) {
@@ -281,26 +270,40 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 
 /**
  * =========================================
- * PAYMENT PROFILE ENDPOINTS
+ * PAYMENT PROFILE ENDPOINTS (UPDATED)
  * =========================================
  */
 app.post("/api/user/update-payment-profile", auth, async (req, res) => {
     try {
         const { name, email, phones } = req.body;
-        // Clean phones to ensure standard format (remove spaces)
+        // Clean phones to remove any spaces or special characters
         const cleanPhones = (phones || []).map(p => p.replace(/\s/g, ''));
 
-        await User.findByIdAndUpdate(req.user.id, {
-            $set: {
-                paymentProfileName: name,
-                paymentProfileEmail: email,
-                paymentPhone1: cleanPhones[0] || null,
-                paymentPhone2: cleanPhones[1] || null,
-                paymentPhone3: cleanPhones[2] || null
-            }
+        // Look up authenticated user and update directly into database storage
+        const updatedUser = await User.findByIdAndUpdate(
+            req.user.id, 
+            {
+                $set: {
+                    paymentProfileName: name,
+                    paymentProfileEmail: email,
+                    paymentPhone1: cleanPhones[0] || null,
+                    paymentPhone2: cleanPhones[1] || null,
+                    paymentPhone3: cleanPhones[2] || null
+                }
+            },
+            { new: true } // Return the updated document
+        );
+
+        if (!updatedUser) {
+            return res.status(404).json({ error: "User not found." });
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Payment channels synchronized to your account." 
         });
-        res.json({ success: true, message: "Payment channels synchronized to your account." });
     } catch (err) {
+        console.error("Update Profile Error:", err);
         res.status(500).json({ error: "Failed to update your permanent payment profile." });
     }
 });
