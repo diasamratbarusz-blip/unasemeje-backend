@@ -205,30 +205,27 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 app.post("/api/paynecta/webhook", async (req, res) => {
-    // Immediate 200 response to Paynecta to prevent timeouts
-    res.status(200).send("Webhook received");
+    // Immediate acknowledgement to Paynecta
+    res.status(200).send("Webhook processed");
 
     try {
         const event = req.body;
         const { event_type, data } = event;
         const transaction = data?.transaction || {};
 
-        // Extract phone number from any possible field Paynecta might send
+        // Extract phone number
         let phone = transaction.mobile_number || data?.PhoneNumber || data?.phone;
 
         if (event_type === "payment.completed" && phone) {
-            // 1. Remove all spaces and "+" signs
+            // Normalize phone for searching
             let cleanPhone = String(phone).replace(/[\s+]/g, '');
-
-            // 2. Get the "Core" number (e.g., 715509440 or 115...)
-            // This removes leading 0 or 254 so we can match any format in DB
             let corePhone = cleanPhone;
             if (corePhone.startsWith("254")) corePhone = corePhone.substring(3);
             if (corePhone.startsWith("0")) corePhone = corePhone.substring(1);
 
-            console.log(`[Webhook] Processing payment for Core Phone: ${corePhone}`);
+            console.log(`[Webhook] Auto-funding for Core Phone: ${corePhone}`);
 
-            // 3. Find User using Regex on core digits
+            // Find User using normalized phone across all possible fields
             const user = await User.findOne({
                 $or: [
                     { phone: { $regex: corePhone } },
@@ -240,11 +237,14 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 
             if (user) {
                 const transCode = data?.MpesaReceiptNumber || transaction.reference || `TRX-${Date.now()}`;
+                
+                // Prevent double funding via transaction code check
                 const existingDeposit = await Deposit.findOne({ transactionCode: transCode });
 
                 if (!existingDeposit) {
                     const amount = Number(transaction.amount || 0);
                     
+                    // Create deposit record
                     await Deposit.create({
                         userId: user._id,
                         userEmail: user.email,
@@ -254,18 +254,20 @@ app.post("/api/paynecta/webhook", async (req, res) => {
                         status: "completed"
                     });
 
+                    // Update user balance immediately
                     user.balance += amount;
                     await user.save();
-                    log(`Deposit Success: ${user.username} | Amount: ${amount} | TRX: ${transCode}`);
+                    
+                    log(`INSTANT FUNDING: ${user.username} | +KES ${amount} | TRX: ${transCode}`);
                 } else {
-                    console.log(`[Webhook] Duplicate Transaction Code: ${transCode}`);
+                    console.log(`[Webhook] Transaction ${transCode} already processed.`);
                 }
             } else {
-                console.log(`[Webhook] No user found matching phone core: ${corePhone}`);
+                console.log(`[Webhook] No user found for phone: ${corePhone}. Logged for manual check.`);
             }
         }
     } catch (err) {
-        log(`Webhook Error: ${err.message}`);
+        log(`Webhook Processing Error: ${err.message}`);
     }
 });
 
