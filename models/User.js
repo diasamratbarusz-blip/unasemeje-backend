@@ -5,7 +5,8 @@ const crypto = require("crypto");
  * =========================================
  * USER SCHEMA (unasemeje ø dia SMM PANEL)
  * =========================================
- * Updated for high-security admin verification.
+ * Updated for high-security admin verification and 
+ * automated payment profile synchronization.
  */
 
 // Function to generate a unique 8-character referral code
@@ -17,8 +18,7 @@ const UserSchema = new mongoose.Schema(
   {
     /* ================= AUTHENTICATION INFO ================= */
     
-    /** 
-     * Username support for branding and unique identification.
+    /** * Username support for branding and unique identification.
      */
     username: {
       type: String,
@@ -47,8 +47,7 @@ const UserSchema = new mongoose.Schema(
       required: [true, "Password is required"]
     },
 
-    /** 
-     * Phone required for Kenyan mobile payment triggers (M-Pesa).
+    /** * Phone required for Kenyan mobile payment triggers (M-Pesa).
      * STATED OWNER: 0715509440
      */
     phone: {
@@ -177,13 +176,14 @@ const UserSchema = new mongoose.Schema(
 );
 
 /* ================= DATABASE INDEXING ================= */
+// Optimized indexing for fast lookup during high-traffic SMM operations
 UserSchema.index({ username: 1 });
 UserSchema.index({ email: 1 });
 UserSchema.index({ phone: 1 });
 UserSchema.index({ role: 1 });
 UserSchema.index({ referralCode: 1 });
 
-// Fast-lookup indexing for webhook verification
+// Fast-lookup indexing for automated payment webhook verification
 UserSchema.index({ paymentProfileEmail: 1 });
 UserSchema.index({ paymentPhone1: 1 });
 UserSchema.index({ paymentPhone2: 1 });
@@ -195,17 +195,17 @@ UserSchema.index({ paymentPhone3: 1 });
  * and your specific credentials are automatically granted Admin status.
  */
 UserSchema.pre("save", function (next) {
-  // Clean phone number formatting by removing spaces
+  // Clean phone number formatting by removing spaces and special characters
   if (this.phone) {
-    this.phone = this.phone.replace(/\s+/g, '');
+    this.phone = this.phone.replace(/[\s+-]/g, '');
   }
 
   // Clean the dedicated automated funding numbers as well
-  if (this.paymentPhone1) this.paymentPhone1 = this.paymentPhone1.replace(/\s+/g, '');
-  if (this.paymentPhone2) this.paymentPhone2 = this.paymentPhone2.replace(/\s+/g, '');
-  if (this.paymentPhone3) this.paymentPhone3 = this.paymentPhone3.replace(/\s+/g, '');
+  if (this.paymentPhone1) this.paymentPhone1 = this.paymentPhone1.replace(/[\s+-]/g, '');
+  if (this.paymentPhone2) this.paymentPhone2 = this.paymentPhone2.replace(/[\s+-]/g, '');
+  if (this.paymentPhone3) this.paymentPhone3 = this.paymentPhone3.replace(/[\s+-]/g, '');
 
-  // FORCE ADMIN LOCK: Automatically assigns 'admin' role to your credentials
+  // FORCE ADMIN LOCK: Automatically assigns 'admin' role to your specific credentials
   const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
   const ADMIN_PHONE = "0715509440";
 
