@@ -25,7 +25,7 @@ const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
 
 const PAYNECTA_PAYMENT_PAGE =
     process.env.PAYNECTA_PAYMENT_PAGE ||
-    "https://paynecta.co.ke/pay/Unasemeje";
+    "https://paynecta.co.ke/pay/unasemeje-";
 
 const app = express();
 
@@ -205,7 +205,7 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 app.post("/api/paynecta/webhook", async (req, res) => {
-    res.status(200).send("Webhook processed");
+    res.status(200).send("Webhook received");
 
     try {
         const event = req.body;
@@ -270,7 +270,7 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 
 /**
  * =========================================
- * PAYMENT PROFILE ENDPOINTS (UPDATED)
+ * PAYMENT PROFILE ENDPOINTS
  * =========================================
  */
 const handleProfileUpdate = async (req, res) => {
@@ -278,14 +278,12 @@ const handleProfileUpdate = async (req, res) => {
         const { name, email, phones } = req.body;
         const cleanPhones = (phones || []).map(p => p.replace(/\s/g, ''));
 
-        // We use req.user.id from the 'auth' middleware to find the logged-in user
-        // Then we update the fields that will be stored in the database permanent profile
         const updatedUser = await User.findByIdAndUpdate(
             req.user.id, 
             {
                 $set: {
-                    paymentProfileName: name, // Stores the First/Last name from UI
-                    paymentProfileEmail: email, // Stores the designated payment email
+                    paymentProfileName: name,
+                    paymentProfileEmail: email,
                     paymentPhone1: cleanPhones[0] || null,
                     paymentPhone2: cleanPhones[1] || null,
                     paymentPhone3: cleanPhones[2] || null
@@ -294,9 +292,7 @@ const handleProfileUpdate = async (req, res) => {
             { new: true }
         );
 
-        if (!updatedUser) {
-            return res.status(404).json({ error: "User not found." });
-        }
+        if (!updatedUser) return res.status(404).json({ error: "User not found." });
 
         res.json({ 
             success: true, 
@@ -499,11 +495,24 @@ app.get("/api/sync-orders", auth, async (req, res) => {
  * =========================================
  */
 app.post("/api/deposit", auth, async (req, res) => {
-    const { amount, transactionCode } = req.body;
-    const exists = await Deposit.findOne({ transactionCode: transactionCode.toUpperCase() });
-    if (exists) return res.status(400).json({ error: "Exists" });
-    await Deposit.create({ userId: req.user.id, userEmail: req.user.email, amount, transactionCode: transactionCode.toUpperCase(), status: "pending" });
-    res.json({ success: true });
+    try {
+        const { amount, transactionCode } = req.body;
+        const code = transactionCode.toUpperCase();
+        const exists = await Deposit.findOne({ transactionCode: code });
+        if (exists) return res.status(400).json({ error: "Transaction already registered." });
+        
+        await Deposit.create({ 
+            userId: req.user.id, 
+            userEmail: req.user.email, 
+            amount: Number(amount), 
+            transactionCode: code, 
+            status: "pending",
+            source: "manual_verification"
+        });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Deposit request failed." });
+    }
 });
 
 app.get("/api/admin/users", adminAuth, async (req, res) => res.json(await User.find().select("-password")));
