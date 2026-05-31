@@ -334,16 +334,27 @@ app.post("/api/paynecta/initialize", auth, async (req, res) => {
     }
 });
 
+// NEW: Paynecta Transaction Status Endpoint
 app.get("/api/paynecta/status", auth, async (req, res) => {
     try {
         const { transaction_reference } = req.query;
+        if (!transaction_reference) {
+            return res.status(400).json({ success: false, message: "Transaction reference is required" });
+        }
+
         const response = await axios.get(`${PAYNECTA_BASE_URL}/payment/status`, {
             params: { transaction_reference },
-            headers: { "X-API-Key": process.env.PAYNECTA_API_KEY, "X-User-Email": ADMIN_EMAIL }
+            headers: { 
+                "X-API-Key": process.env.PAYNECTA_API_KEY, 
+                "X-User-Email": ADMIN_EMAIL 
+            }
         });
         res.json(response.data);
     } catch (error) {
-        res.status(400).json({ success: false, message: "Could not retrieve status" });
+        res.status(error.response?.status || 400).json({ 
+            success: false, 
+            message: error.response?.data?.message || "Could not retrieve status" 
+        });
     }
 });
 
