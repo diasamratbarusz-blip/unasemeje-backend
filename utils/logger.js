@@ -14,9 +14,13 @@ const path = require("path");
 const logDir = path.join(__dirname, "../logs");
 const logFile = path.join(logDir, "app.log");
 
-// Ensure logs folder exists
-if (!fs.existsSync(logDir)) {
-  fs.mkdirSync(logDir, { recursive: true });
+// Ensure logs folder exists safely
+try {
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true });
+  }
+} catch (dirError) {
+  console.warn("⚠️ Warning: Local disk directory creation skipped. Running in read-only environment.");
 }
 
 /**
@@ -35,21 +39,25 @@ function log(message, level = "INFO") {
   // Format: [5/8/2026, 10:20:00 PM] [ERROR] Message content
   const formattedMessage = `[${time}] [${level.toUpperCase()}] ${message}\n`;
 
-  // Print to terminal for real-time monitoring (Vercel/Heroku logs)
+  // Print to terminal for real-time monitoring (Render live log stream)
   if (level.toUpperCase() === "ERROR") {
-    console.error(`❌ ${formattedMessage}`);
+    console.error(`❌ ${formattedMessage.trim()}`);
   } else if (level.toUpperCase() === "WARN") {
-    console.warn(`⚠️ ${formattedMessage}`);
+    console.warn(`⚠️ ${formattedMessage.trim()}`);
   } else {
-    console.log(`📡 ${formattedMessage}`);
+    console.log(`📡 ${formattedMessage.trim()}`);
   }
 
   // Append to the local log file for persistent debugging
   try {
     fs.appendFileSync(logFile, formattedMessage);
   } catch (err) {
-    // Fallback if file system is read-only (common in some hosting environments)
-    console.error("CRITICAL: Failed to write to log file. Check folder permissions.", err.message);
+    /**
+     * Fallback handling for cloud hosting (Render):
+     * If disk is non-persistent or read-only, we do not throw unhandled rejections
+     * so your critical app execution or payment webhook stays alive.
+     */
+    return; 
   }
 }
 
