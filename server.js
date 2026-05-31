@@ -18,6 +18,7 @@ const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
 // ================= CONFIGURATION & CONSTANTS =================
+// Updated to match your specific owner identity across the system
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com".toLowerCase();
 const ADMIN_PHONE = "0715509440";
 
@@ -25,7 +26,7 @@ const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
 
 const PAYNECTA_PAYMENT_PAGE =
     process.env.PAYNECTA_PAYMENT_PAGE ||
-    "https://paynecta.co.ke/pay/unasemeje-";
+    "https://paynecta.co.ke/pay/Unasemeje";
 
 const app = express();
 
@@ -49,7 +50,12 @@ app.use(cors({
         }
     },
     methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-API-Key", "X-User-Email"]
+    allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "X-API-Key",
+        "X-User-Email"
+    ]
 }));
 
 app.use(express.json());
@@ -66,6 +72,12 @@ connectDB()
         console.log("\n=======================================");
         console.log("🚀 UNASEMEJE ø DIA SERVER STARTED");
         console.log("=======================================\n");
+
+        console.log(
+            "Paynecta API:",
+            process.env.PAYNECTA_API_KEY ? "✅ CONNECTED" : "❌ NO API KEY"
+        );
+
         verifyPaynecta();
     })
     .catch(err => {
@@ -89,7 +101,9 @@ async function verifyPaynecta() {
             }
         );
         if (response.data && response.data.success) {
-            console.log("✅ Paynecta Verified:", ADMIN_EMAIL);
+            console.log("✅ Paynecta Verified:", response.data.data?.email || ADMIN_EMAIL);
+        } else {
+            console.log("❌ Paynecta Verification Failed");
         }
     } catch (error) {
         console.log("❌ Paynecta Verify Error:", error.message);
@@ -98,18 +112,18 @@ async function verifyPaynecta() {
 
 /**
  * =========================================
- * AUTH MIDDLEWARES
+ * AUTH MIDDLEWARE
  * =========================================
  */
 function auth(req, res, next) {
     try {
         const header = req.headers.authorization;
-        if (!header) return res.status(401).json({ error: "No token provided." });
+        if (!header) return res.status(401).json({ error: "Access denied." });
         const token = header.split(" ")[1];
         req.user = jwt.verify(token, process.env.JWT_SECRET);
         next();
     } catch (err) {
-        return res.status(401).json({ error: "Invalid token" });
+        return res.status(401).json({ error: "Invalid or expired token" });
     }
 }
 
@@ -119,18 +133,68 @@ function adminAuth(req, res, next) {
         if (userEmail === ADMIN_EMAIL && req.user.phone === ADMIN_PHONE) {
             next();
         } else {
-            res.status(403).json({ error: "Forbidden: Owner access only." });
+            log(`UNAUTHORIZED ACCESS ATTEMPT: ${userEmail}`);
+            return res.status(403).json({ error: "Forbidden: Owner access only." });
         }
     });
 }
 
 /**
  * =========================================
- * PAYNECTA AUTOMATED WEBHOOK (UPDATED)
+ * BUSINESS LOGIC
+ * =========================================
+ */
+function generateReferralCode() {
+    return crypto.randomBytes(4).toString("hex");
+}
+
+async function giveReferralBonus(userId, orderCost) {
+    try {
+        const user = await User.findById(userId);
+        if (!user || !user.referredBy) return;
+        const referrer = await User.findOne({ referralCode: user.referredBy });
+        if (!referrer) return;
+        const bonus = orderCost * 0.10;
+        referrer.balance += bonus;
+        referrer.referralEarnings = (referrer.referralEarnings || 0) + bonus;
+        await referrer.save();
+        log(`Referral bonus KES ${bonus} sent to ${referrer.username}`);
+    } catch (err) {
+        log("Referral Bonus Error: " + err.message);
+    }
+}
+
+function cleanServiceName(name = "") {
+    return String(name || "").replace(/\\/g, "").replace(/\[.*?\]/g, "").trim() || "SMM Service";
+}
+
+function detectPlatform(service = {}) {
+    const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
+    if (/(instagram|insta|ig)/.test(text)) return "Instagram";
+    if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
+    if (/(youtube|yt)/.test(text)) return "YouTube";
+    if (/(facebook|fb)/.test(text)) return "Facebook";
+    if (/(twitter|x)/.test(text)) return "Twitter/X";
+    if (/(telegram|tg)/.test(text)) return "Telegram";
+    return "Other";
+}
+
+function applyFinalPrice(originalRate, name) {
+    const t = String(name).toLowerCase();
+    let markup = 40;
+    if (t.includes("like")) markup = 30;
+    if (t.includes("follower")) markup = 25;
+    if (t.includes("view")) markup = 35;
+    return Number((Number(originalRate || 0) + markup).toFixed(2));
+}
+
+/**
+ * =========================================
+ * PAYNECTA AUTOMATED WEBHOOK (INTEGRATED)
  * =========================================
  */
 app.post("/api/paynecta/webhook", async (req, res) => {
-    // Send 200 immediately to acknowledge Paynecta
+    // Acknowledge receipt immediately to maintain portal success metrics
     res.status(200).send("Webhook received");
 
     try {
@@ -138,27 +202,23 @@ app.post("/api/paynecta/webhook", async (req, res) => {
         const { event_type, data } = event;
         const transaction = data?.transaction || {};
 
-        const incomingPhone = (
-            transaction.mobile_number || 
-            data?.PhoneNumber || 
-            data?.phone || ""
-        ).toString().replace(/\s+/g, '');
+        const phone = transaction.mobile_number || data?.PhoneNumber || data?.phone;
 
-        if (event_type === "payment.completed" && incomingPhone) {
-            
-            // SEARCH: Find user where the incoming phone matches ANY of their 4 saved channels
+        if (event_type === "payment.completed" && phone) {
+            const cleanPhone = String(phone).replace(/\s+/g, '');
+
+            // SEARCH: Find user across primary phone and all 3 payment profile slots
             const user = await User.findOne({
                 $or: [
-                    { phone: incomingPhone },
-                    { paymentPhone1: incomingPhone },
-                    { paymentPhone2: incomingPhone },
-                    { paymentPhone3: incomingPhone }
+                    { phone: { $regex: cleanPhone } },
+                    { paymentPhone1: cleanPhone },
+                    { paymentPhone2: cleanPhone },
+                    { paymentPhone3: cleanPhone }
                 ]
             });
 
             if (user) {
                 const transCode = data?.MpesaReceiptNumber || transaction.reference || crypto.randomBytes(4).toString("hex");
-
                 const existingDeposit = await Deposit.findOne({ transactionCode: transCode });
 
                 if (!existingDeposit) {
@@ -167,7 +227,7 @@ app.post("/api/paynecta/webhook", async (req, res) => {
                     await Deposit.create({
                         userId: user._id,
                         userEmail: user.email,
-                        phone: incomingPhone,
+                        phone: cleanPhone,
                         amount: amount,
                         transactionCode: transCode,
                         status: "completed"
@@ -175,36 +235,27 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 
                     user.balance += amount;
                     await user.save();
-
-                    log(`✅ Automated Credit: ${user.email} received KES ${amount} via ${incomingPhone}`);
+                    log(`🎉 AUTO-CREDIT: ${user.email} matched via ${cleanPhone}. Added KES ${amount}`);
                 }
-            } else {
-                log(`⚠️ Webhook Warning: Unrecognized payment from ${incomingPhone}`);
             }
         }
     } catch (err) {
-        log(`Webhook Processing Error: ${err.message}`);
+        log(`Webhook Error: ${err.message}`);
     }
 });
 
 /**
  * =========================================
- * USER PROFILE ENDPOINTS (NEW)
+ * PROFILE & PAYMENT CHANNEL ENDPOINTS
  * =========================================
  */
 
-// SAVE PAYMENT PROFILE FROM ADD-FUNDS MODAL
+// Save profile data from Add Funds modal
 app.post("/api/user/update-payment-profile", auth, async (req, res) => {
     try {
         const { name, email, phones } = req.body;
-
-        if (!name || !email || !phones || !phones[0]) {
-            return res.status(400).json({ error: "Incomplete profile details" });
-        }
-
         const user = await User.findById(req.user.id);
-        if (!user) return res.status(404).json({ error: "User not found" });
-
+        
         user.paymentProfileName = name;
         user.paymentProfileEmail = email;
         user.paymentPhone1 = phones[0] || null;
@@ -212,33 +263,56 @@ app.post("/api/user/update-payment-profile", auth, async (req, res) => {
         user.paymentPhone3 = phones[2] || null;
 
         await user.save();
-
-        res.json({ success: true, message: "Payment profile synchronized" });
+        res.json({ success: true, message: "Payment channels synchronized." });
     } catch (err) {
-        res.status(500).json({ error: "Failed to update profile" });
-    }
-});
-
-// FETCH PROFILE DATA FOR DASHBOARD
-app.get("/api/user/payment-profile", auth, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select("paymentProfileName paymentProfileEmail paymentPhone1 paymentPhone2 paymentPhone3");
-        res.json({
-            success: true,
-            profile: {
-                name: user.paymentProfileName,
-                email: user.paymentProfileEmail,
-                phones: [user.paymentPhone1, user.paymentPhone2, user.paymentPhone3].filter(Boolean)
-            }
-        });
-    } catch (err) {
-        res.status(500).json({ error: "Failed to fetch profile" });
+        res.status(500).json({ error: "Failed to save profile." });
     }
 });
 
 /**
  * =========================================
- * AUTH ROUTES
+ * SMM & ORDER ROUTES (UNCHANGED)
+ * =========================================
+ */
+app.get("/api/services", async (req, res) => {
+    try {
+        const services = await Service.find();
+        const grouped = {};
+        services.forEach(s => {
+            const p = s.platform;
+            const c = s.category;
+            if (!grouped[p]) grouped[p] = {};
+            if (!grouped[p][c]) grouped[p][c] = [];
+            grouped[p][c].push({ ...s.toObject(), rate: applyFinalPrice(s.rate, s.name) });
+        });
+        res.json({ success: true, data: grouped });
+    } catch (err) { res.status(500).json({ error: "Failed to load services" }); }
+});
+
+app.post("/api/order", auth, async (req, res) => {
+    try {
+        const { serviceId, link, quantity } = req.body;
+        const service = await Service.findOne({ serviceId });
+        const user = await User.findById(req.user.id);
+        const totalCost = (applyFinalPrice(service.rate, service.name) / 1000) * Number(quantity);
+
+        if (user.balance < totalCost) return res.status(400).json({ error: "Insufficient balance" });
+
+        const providerRes = await axios.get(`https://delixgainske.com/api/v2?key=${process.env.SMM_API_KEY}&action=add&service=${serviceId}&link=${encodeURIComponent(link)}&quantity=${quantity}`);
+
+        if (providerRes.data?.order) {
+            await Order.create({ userId: user._id, userEmail: user.email, serviceId, serviceName: service.name, orderId: String(providerRes.data.order), link, quantity, cost: totalCost, status: "pending" });
+            user.balance -= totalCost;
+            await user.save();
+            await giveReferralBonus(user._id, totalCost);
+            res.json({ success: true, newBalance: user.balance.toFixed(2) });
+        } else { res.status(400).json({ error: "Provider rejected order." }); }
+    } catch (err) { res.status(500).json({ error: "Order failed." }); }
+});
+
+/**
+ * =========================================
+ * AUTH & USER ROUTES
  * =========================================
  */
 app.post("/api/register", async (req, res) => {
@@ -248,33 +322,23 @@ app.post("/api/register", async (req, res) => {
         if (exists) return res.status(400).json({ error: "Account exists" });
 
         await User.create({
-            username: username?.toLowerCase(),
-            email: email?.toLowerCase(),
-            password,
-            phone,
-            referralCode: crypto.randomBytes(4).toString("hex"),
+            username: username?.toLowerCase(), email: email?.toLowerCase(),
+            password, phone, referralCode: generateReferralCode(),
             referredBy: referralCode || null
         });
         res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ error: "Registration failed" });
-    }
+    } catch (err) { res.status(500).json({ error: "Registration failed" }); }
 });
 
 app.post("/api/login", async (req, res) => {
     try {
         const { identifier, password } = req.body;
-        const user = await User.findOne({
-            $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }],
-            password
-        });
+        const user = await User.findOne({ $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }], password });
         if (!user) return res.status(400).json({ error: "Invalid credentials" });
 
         const token = jwt.sign({ id: user._id, email: user.email, phone: user.phone }, process.env.JWT_SECRET, { expiresIn: "7d" });
         res.json({ token, balance: user.balance });
-    } catch (err) {
-        res.status(500).json({ error: "Login failed" });
-    }
+    } catch (err) { res.status(500).json({ error: "Login failed" }); }
 });
 
 app.get("/api/me", auth, async (req, res) => {
@@ -284,27 +348,13 @@ app.get("/api/me", auth, async (req, res) => {
 
 /**
  * =========================================
- * SMM SERVICE LOGIC (UNCHANGED)
- * =========================================
- */
-// [Service, Order, Sync, and Referral Bonus logic remains exactly as provided in your original code]
-
-/**
- * =========================================
  * STATIC ROUTES & ADMIN
  * =========================================
  */
-const pages = ["home", "new-order", "my-orders", "services", "add-funds", "referrals", "dashboard"];
+const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "dashboard"];
 pages.forEach(p => app.get(`/${p}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${p}.html`))));
 app.get("/admin", adminAuth, (req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "home.html")));
 
-/**
- * =========================================
- * SERVER START
- * =========================================
- */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 UNASEMEJE ø DIA - Online on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA - Online on port ${PORT}`));
