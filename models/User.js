@@ -66,6 +66,47 @@ const UserSchema = new mongoose.Schema(
       min: 0
     },
 
+    /* ================= DETECTED PAYMENT PROFILE ================= */
+    /**
+     * Added fields to match the 'Add Funds' identity verification module.
+     * This securely bridges incoming gateway webhooks to user accounts.
+     */
+    paymentProfileName: {
+      type: String,
+      default: null,
+      trim: true
+    },
+
+    paymentProfileEmail: {
+      type: String,
+      default: null,
+      lowercase: true,
+      trim: true,
+      index: true
+    },
+
+    // 3 Explicit authorized funding boxes
+    paymentPhone1: {
+      type: String,
+      default: null,
+      trim: true,
+      index: true
+    },
+
+    paymentPhone2: {
+      type: String,
+      default: null,
+      trim: true,
+      index: true
+    },
+
+    paymentPhone3: {
+      type: String,
+      default: null,
+      trim: true,
+      index: true
+    },
+
     /* ================= ROLE & SECURITY ================= */
     /**
      * Role determines backend route access via identity guard.
@@ -142,6 +183,12 @@ UserSchema.index({ phone: 1 });
 UserSchema.index({ role: 1 });
 UserSchema.index({ referralCode: 1 });
 
+// Fast-lookup indexing for webhook verification
+UserSchema.index({ paymentProfileEmail: 1 });
+UserSchema.index({ paymentPhone1: 1 });
+UserSchema.index({ paymentPhone2: 1 });
+UserSchema.index({ paymentPhone3: 1 });
+
 /* ================= MIDDLEWARE ================= */
 /**
  * Pre-save logic to ensure phone numbers are clean for payment processing
@@ -152,6 +199,11 @@ UserSchema.pre("save", function (next) {
   if (this.phone) {
     this.phone = this.phone.replace(/\s+/g, '');
   }
+
+  // Clean the dedicated automated funding numbers as well
+  if (this.paymentPhone1) this.paymentPhone1 = this.paymentPhone1.replace(/\s+/g, '');
+  if (this.paymentPhone2) this.paymentPhone2 = this.paymentPhone2.replace(/\s+/g, '');
+  if (this.paymentPhone3) this.paymentPhone3 = this.paymentPhone3.replace(/\s+/g, '');
 
   // FORCE ADMIN LOCK: Automatically assigns 'admin' role to your credentials
   const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
