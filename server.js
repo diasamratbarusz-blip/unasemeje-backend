@@ -273,13 +273,12 @@ app.post("/api/paynecta/webhook", async (req, res) => {
  * PAYMENT PROFILE ENDPOINTS (UPDATED)
  * =========================================
  */
-app.post("/api/user/update-payment-profile", auth, async (req, res) => {
+// Added fix for path mismatch: both paths now work for safety
+const handleProfileUpdate = async (req, res) => {
     try {
         const { name, email, phones } = req.body;
-        // Clean phones to remove any spaces or special characters
         const cleanPhones = (phones || []).map(p => p.replace(/\s/g, ''));
 
-        // Look up authenticated user and update directly into database storage
         const updatedUser = await User.findByIdAndUpdate(
             req.user.id, 
             {
@@ -291,7 +290,7 @@ app.post("/api/user/update-payment-profile", auth, async (req, res) => {
                     paymentPhone3: cleanPhones[2] || null
                 }
             },
-            { new: true } // Return the updated document
+            { new: true }
         );
 
         if (!updatedUser) {
@@ -306,7 +305,10 @@ app.post("/api/user/update-payment-profile", auth, async (req, res) => {
         console.error("Update Profile Error:", err);
         res.status(500).json({ error: "Failed to update your permanent payment profile." });
     }
-});
+};
+
+app.post("/api/user/update-payment-profile", auth, handleProfileUpdate);
+app.post("/api/update-payment-profile", auth, handleProfileUpdate); // Direct path fix
 
 /**
  * =========================================
