@@ -54,8 +54,7 @@ module.exports = function auth(req, res, next) {
     }
 
     // ================= ATTACH USER =================
-    /** 
-     * The decoded payload contains:
+    /** * The decoded payload contains:
      * { id: user._id, email: user.email, phone: user.phone, role: user.role }
      * This is critical for the Identity Guard in Admin routes.
      */
