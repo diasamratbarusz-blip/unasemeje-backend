@@ -272,27 +272,35 @@ app.post("/api/paynecta/webhook", async (req, res) => {
 
 /**
  * =========================================
- * PAYMENT PROFILE ENDPOINTS
+ * PAYMENT PROFILE ENDPOINTS (UPDATED FOR COMPATIBILITY)
  * =========================================
  */
 const handleProfileUpdate = async (req, res) => {
     try {
-        const { name, email, phones } = req.body;
+        // Handlers process both styles of payload formats seamlessly (traditional structural naming format vs flat form edits)
+        const { name, username, firstName, lastName, email, phones, paymentPhone1, paymentPhone2, paymentPhone3 } = req.body;
         
-        // Clean formatting for the database to ensure webhook matches work perfectly
-        const cleanPhones = (phones || []).map(p => typeof p === 'string' ? p.replace(/[\s+-]/g, '') : p);
+        let p1 = paymentPhone1 || (phones && phones[0]);
+        let p2 = paymentPhone2 || (phones && phones[1]);
+        let p3 = paymentPhone3 || (phones && phones[2]);
+
+        const updatePayload = {};
+        
+        // Form updates fields if provided by client request architecture
+        if (username) updatePayload.username = String(username).toLowerCase().trim();
+        if (firstName) updatePayload.firstName = firstName.trim();
+        if (lastName) updatePayload.lastName = lastName.trim();
+        if (name) updatePayload.paymentProfileName = name.trim();
+        if (email) updatePayload.paymentProfileEmail = email.trim();
+        
+        // Clean and attach payment channels validation structures safely
+        if (p1 !== undefined) updatePayload.paymentPhone1 = p1 ? String(p1).replace(/[\s+-]/g, '') : null;
+        if (p2 !== undefined) updatePayload.paymentPhone2 = p2 ? String(p2).replace(/[\s+-]/g, '') : null;
+        if (p3 !== undefined) updatePayload.paymentPhone3 = p3 ? String(p3).replace(/[\s+-]/g, '') : null;
 
         const updatedUser = await User.findByIdAndUpdate(
             req.user.id, 
-            {
-                $set: {
-                    paymentProfileName: name,
-                    paymentProfileEmail: email,
-                    paymentPhone1: cleanPhones[0] || null,
-                    paymentPhone2: cleanPhones[1] || null,
-                    paymentPhone3: cleanPhones[2] || null
-                }
-            },
+            { $set: updatePayload },
             { new: true, runValidators: true }
         );
 
@@ -300,8 +308,11 @@ const handleProfileUpdate = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Payment channels synchronized to your permanent storage.",
+            message: "Profile and payment channels synchronized securely.",
             profile: {
+                username: updatedUser.username,
+                firstName: updatedUser.firstName,
+                lastName: updatedUser.lastName,
                 name: updatedUser.paymentProfileName,
                 email: updatedUser.paymentProfileEmail,
                 phones: [updatedUser.paymentPhone1, updatedUser.paymentPhone2, updatedUser.paymentPhone3].filter(Boolean)
@@ -309,13 +320,17 @@ const handleProfileUpdate = async (req, res) => {
         });
     } catch (err) {
         console.error("Update Profile Error:", err.message);
-        res.status(500).json({ error: "Failed to update your permanent payment profile." });
+        res.status(500).json({ error: "Failed to update your permanent profile identity data." });
     }
 };
 
-// Aliased routes to handle both potential frontend call styles
+// Aliased routing links to support old variations and your standard Add-Funds frontend page calls
 app.post("/api/user/update-payment-profile", auth, handleProfileUpdate);
 app.post("/api/update-payment-profile", auth, handleProfileUpdate); 
+
+// NEW: Maps exactly to your frontend file's fetch request rules (handles both update endpoint calls safely)
+app.put("/api/user/update-profile", auth, handleProfileUpdate);
+app.post("/api/user/update-profile", auth, handleProfileUpdate);
 
 /**
  * =========================================
@@ -417,6 +432,24 @@ app.get("/api/me", auth, async (req, res) => {
         res.json(user);
     } catch (err) {
         res.status(500).json({ error: "Failed to fetch profile." });
+    }
+});
+
+// PASSWORD MODIFICATION PATHWAY (Added verification layer endpoint to handle backend call)
+app.post("/api/user/change-password", auth, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const user = await User.findById(req.user.id);
+        
+        if (!user || user.password !== currentPassword) {
+            return res.status(400).json({ error: "Current security configuration verification failed." });
+        }
+        
+        user.password = newPassword;
+        await user.save();
+        res.json({ success: true, message: "Security gateway update confirmed." });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to process security modification." });
     }
 });
 
