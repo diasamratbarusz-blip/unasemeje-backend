@@ -30,6 +30,21 @@ const UserSchema = new mongoose.Schema(
     },
 
     /**
+     * Profile structure updates to match metadata transmission synchronization
+     */
+    firstName: {
+      type: String,
+      default: null,
+      trim: true
+    },
+
+    lastName: {
+      type: String,
+      default: null,
+      trim: true
+    },
+
+    /**
      * Email is the primary identifier.
      * STATED OWNER: diasamratbarusz@gmail.com
      */
