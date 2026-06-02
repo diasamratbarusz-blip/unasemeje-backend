@@ -69,10 +69,16 @@ app.use(express.static(path.join(__dirname, "public")));
  * Ensures database connectivity during serverless execution loops
  * =========================================
  */
+// Cache the connection promise to prevent multiple concurrent connections on cold start
+let dbConnectPromise = null;
+
 app.use(async (req, res, next) => {
     try {
         if (mongoose.connection.readyState !== 1) {
-            await connectDB();
+            if (!dbConnectPromise) {
+                dbConnectPromise = connectDB();
+            }
+            await dbConnectPromise;
         }
         next();
     } catch (err) {
@@ -84,30 +90,33 @@ app.use(async (req, res, next) => {
 /**
  * =========================================
  * DATABASE CONNECTION (TRADITIONAL INSTANCE RUNTIME)
+ * Only runs when NOT in Vercel to prevent cold-start latency and unnecessary API calls
  * =========================================
  */
-connectDB()
-    .then(() => {
-        console.log("\n=======================================");
-        console.log("🚀 UNASEMEJE ø DIA SERVER STARTED");
-        console.log("=======================================\n");
+if (!process.env.VERCEL) {
+    connectDB()
+        .then(() => {
+            console.log("\n=======================================");
+            console.log("🚀 UNASEMEJE ø DIA SERVER STARTED");
+            console.log("=======================================\n");
 
-        console.log(
-            "P1 (Delixgains):",
-            "https://delixgainske.com/api/v2",
-            process.env.SMM_API_KEY ? "✅ CONNECTED" : "❌ NO API KEY"
-        );
+            console.log(
+                "P1 (Delixgains):",
+                "https://delixgainske.com/api/v2",
+                process.env.SMM_API_KEY ? "✅ CONNECTED" : "❌ NO API KEY"
+            );
 
-        console.log(
-            "Paynecta API:",
-            process.env.PAYNECTA_API_KEY ? "✅ CONNECTED" : "❌ NO API KEY"
-        );
+            console.log(
+                "Paynecta API:",
+                process.env.PAYNECTA_API_KEY ? "✅ CONNECTED" : "❌ NO API KEY"
+            );
 
-        verifyPaynecta();
-    })
-    .catch(err => {
-        console.log("❌ MongoDB Connection Error:", err.message);
-    });
+            verifyPaynecta();
+        })
+        .catch(err => {
+            console.log("❌ MongoDB Connection Error:", err.message);
+        });
+}
 
 /**
  * =========================================
