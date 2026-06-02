@@ -65,7 +65,25 @@ app.use(express.static(path.join(__dirname, "public")));
 
 /**
  * =========================================
- * DATABASE CONNECTION
+ * VERCEL COMPATIBLE DATABASE MIDDLEWARE
+ * Ensures database connectivity during serverless execution loops
+ * =========================================
+ */
+app.use(async (req, res, next) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            await connectDB();
+        }
+        next();
+    } catch (err) {
+        console.error("❌ Middleware Database Connection Failure:", err.message);
+        res.status(500).json({ error: "Database connectivity error." });
+    }
+});
+
+/**
+ * =========================================
+ * DATABASE CONNECTION (TRADITIONAL INSTANCE RUNTIME)
  * =========================================
  */
 connectDB()
@@ -277,7 +295,6 @@ app.post("/api/paynecta/webhook", async (req, res) => {
  */
 const handleProfileUpdate = async (req, res) => {
     try {
-        // Handlers process both styles of payload formats seamlessly (traditional structural naming format vs flat form edits)
         const { name, username, firstName, lastName, email, phones, paymentPhone1, paymentPhone2, paymentPhone3 } = req.body;
         
         let p1 = paymentPhone1 || (phones && phones[0]);
@@ -286,14 +303,12 @@ const handleProfileUpdate = async (req, res) => {
 
         const updatePayload = {};
         
-        // Form updates fields if provided by client request architecture
         if (username) updatePayload.username = String(username).toLowerCase().trim();
         if (firstName) updatePayload.firstName = firstName.trim();
         if (lastName) updatePayload.lastName = lastName.trim();
         if (name) updatePayload.paymentProfileName = name.trim();
         if (email) updatePayload.paymentProfileEmail = email.trim();
         
-        // Clean and attach payment channels validation structures safely
         if (p1 !== undefined) updatePayload.paymentPhone1 = p1 ? String(p1).replace(/[\s+-]/g, '') : null;
         if (p2 !== undefined) updatePayload.paymentPhone2 = p2 ? String(p2).replace(/[\s+-]/g, '') : null;
         if (p3 !== undefined) updatePayload.paymentPhone3 = p3 ? String(p3).replace(/[\s+-]/g, '') : null;
@@ -324,11 +339,9 @@ const handleProfileUpdate = async (req, res) => {
     }
 };
 
-// Aliased routing links to support old variations and your standard Add-Funds frontend page calls
 app.post("/api/user/update-payment-profile", auth, handleProfileUpdate);
 app.post("/api/update-payment-profile", auth, handleProfileUpdate); 
 
-// NEW: Maps exactly to your frontend file's fetch request rules (handles both update endpoint calls safely)
 app.put("/api/user/update-profile", auth, handleProfileUpdate);
 app.post("/api/user/update-profile", auth, handleProfileUpdate);
 
@@ -435,7 +448,6 @@ app.get("/api/me", auth, async (req, res) => {
     }
 });
 
-// PASSWORD MODIFICATION PATHWAY (Added verification layer endpoint to handle backend call)
 app.post("/api/user/change-password", auth, async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
@@ -583,5 +595,12 @@ pages.forEach(p => app.get(`/${p}`, (req, res) => res.sendFile(path.join(__dirna
 app.get("/admin", adminAuth, (req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "home.html")));
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA ONLINE ON PORT ${PORT}`));
+// ================= VERCEL EXPORT CONFIGURATION =================
+// Only runs standard app.listen when NOT executing inside Vercel's Serverless environment
+if (!process.env.VERCEL) {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA ONLINE ON PORT ${PORT}`));
+}
+
+// Exports the application block for Vercel's global router integration
+module.exports = app;
