@@ -33,19 +33,20 @@ router.post("/api/paynecta/initialize", auth, async (req, res) => {
 
         // 3. FORMAT PHONE NUMBER (STRICT SAFARICOM FORMAT)
         let formattedPhone = String(mobile_number)
-            .replace(/\D/g, "")
+            .replace(/\D/g, "") // Removes any non-digit characters (like + or spaces)
             .trim();
 
         // Convert 07... to 2547...
         if (formattedPhone.startsWith("0")) {
             formattedPhone = "254" + formattedPhone.substring(1);
         }
-        // Convert 7... to 2547...
+        // Convert 7... or 1... to 2547... or 2541...
         else if (formattedPhone.startsWith("7") || formattedPhone.startsWith("1")) {
             formattedPhone = "254" + formattedPhone;
         }
+        // Note: If it already starts with 254, it remains unchanged.
 
-        // Final Safaricom Validation (2547... or 2541...)
+        // Final Safaricom/Airtel Validation (Must be exactly 12 digits starting with 2547 or 2541)
         if (!/^254(7|1)\d{8}$/.test(formattedPhone)) {
             return res.status(400).json({
                 success: false,
@@ -77,8 +78,10 @@ router.post("/api/paynecta/initialize", auth, async (req, res) => {
             userEmail: req.user.email,
             phone: formattedPhone,
             amount: Number(amount),
+            // Fallback added for 'reference' based on your webhook payload structure
             transactionCode:
                 response.data?.transaction_reference ||
+                response.data?.reference ||
                 `PENDING-${Date.now()}`,
             status: "pending"
         });
