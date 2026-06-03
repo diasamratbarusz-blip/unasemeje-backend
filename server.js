@@ -12,6 +12,10 @@ const bcrypt = require("bcryptjs"); // Added for secure password hashing
 const connectDB = require("./config/db");
 const log = require("./utils/logger");
 
+// ================= ROUTES =================
+// Import the Paynecta initialization route created previously
+const paynectaInitializeRoutes = require("./api/paynecta/initialize/routes");
+
 // ================= MODELS =================
 const User = require("./models/User");
 const Order = require("./models/Order");
@@ -63,6 +67,9 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
+
+// Mount the Paynecta initialize route
+app.use(paynectaInitializeRoutes);
 
 /**
  * =========================================
