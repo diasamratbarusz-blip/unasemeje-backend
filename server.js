@@ -13,7 +13,7 @@ const connectDB = require("./config/db");
 const log = require("./utils/logger");
 
 // ================= ROUTES =================
-// Import the Paynecta initialization route created previously
+// Import the Paynecta initialization route
 const paynectaInitializeRoutes = require("./api/paynecta/initialize/routes");
 
 // ================= MODELS =================
@@ -241,15 +241,8 @@ function applyFinalPrice(originalRate, name) {
  * PAYNECTA WEBHOOK (SMART PHONE MATCHING)
  * =========================================
  */
-// Added GET handler to clear "Cannot GET /api/paynecta/webhook" error on tests/pings
-app.get("/api/paynecta/webhook", (req, res) => {
-    res.status(200).json({
-        status: "active",
-        message: "Paynecta webhook endpoint is healthy and ready to receive POST requests."
-    });
-});
-
-app.post("/api/paynecta/webhook", async (req, res) => {
+// Webhook processing logic extracted to support multiple URL paths cleanly
+const handlePaynectaWebhook = async (req, res) => {
     try {
         const event = req.body;
         const { event_type, data } = event;
@@ -313,7 +306,25 @@ app.post("/api/paynecta/webhook", async (req, res) => {
         log(`Webhook Processing Error: ${err.message}`);
         res.status(500).send("Error processing webhook");
     }
+};
+
+// Support BOTH /api/webhook and /api/paynecta/webhook to guarantee no "Cannot GET" errors
+app.get("/api/webhook", (req, res) => {
+    res.status(200).json({
+        status: "active",
+        message: "Paynecta webhook endpoint is healthy and ready to receive POST requests."
+    });
 });
+
+app.get("/api/paynecta/webhook", (req, res) => {
+    res.status(200).json({
+        status: "active",
+        message: "Paynecta webhook endpoint is healthy and ready to receive POST requests."
+    });
+});
+
+app.post("/api/webhook", handlePaynectaWebhook);
+app.post("/api/paynecta/webhook", handlePaynectaWebhook);
 
 /**
  * =========================================
