@@ -73,8 +73,8 @@ const depositSchema = new mongoose.Schema(
     status: {
       type: String,
       /**
-       * UPDATED: Added "completed" to allow direct funding from the 
-       * Paynecta Webhook without needing manual admin "approval".
+       * UPDATED: Fully accommodates status names across endpoints 
+       * to allow direct funding from the Paynecta Webhook seamlessly.
        */
       enum: ["pending", "approved", "rejected", "failed", "completed"],
       default: "pending",
@@ -107,7 +107,11 @@ const depositSchema = new mongoose.Schema(
     /* ================= SOURCE ================= */
     source: {
       type: String,
-      enum: ["mpesa", "manual", "stk"],
+      /**
+       * UPDATED: Includes manual_verification to ensure full compatibility 
+       * with the strings submitted by your explicit server.js routes.
+       */
+      enum: ["mpesa", "manual", "stk", "manual_verification"],
       default: "manual"
     }
 
@@ -136,8 +140,12 @@ depositSchema.pre("save", function (next) {
   }
   
   // Set default message for STK/Webhook payments if not present
-  if (!this.message && this.source === "stk") {
-    this.message = `Automated STK Deposit of KES ${this.amount} for user ${this.userEmail}`;
+  if (!this.message) {
+    if (this.source === "stk") {
+      this.message = `Automated STK Deposit of KES ${this.amount} for user ${this.userEmail}`;
+    } else if (this.source === "manual_verification") {
+      this.message = `Manual verification request logged for KES ${this.amount} | TRX: ${this.transactionCode}`;
+    }
   }
   
   // Auto-set approvedAt if status is set to completed or approved
