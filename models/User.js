@@ -46,7 +46,7 @@ const UserSchema = new mongoose.Schema(
 
     /**
      * Email is the primary identifier.
-     * STATED OWNER: diasamratbarusz@gmail.com
+     * STATED OWNER: diasamratbarusz@gmail.com / diasamratb@gmail.com
      */
     email: {
       type: String,
@@ -221,10 +221,15 @@ UserSchema.pre("save", function (next) {
   if (this.paymentPhone3) this.paymentPhone3 = this.paymentPhone3.replace(/[\s+-]/g, '');
 
   // FORCE ADMIN LOCK: Automatically assigns 'admin' role to your specific credentials
-  const ADMIN_EMAIL = "diasamratbarusz@gmail.com";
+  // Supports both configurations to align perfectly across your systems
+  const ADMIN_EMAIL_1 = "diasamratb@gmail.com";
+  const ADMIN_EMAIL_2 = "diasamratbarusz@gmail.com";
   const ADMIN_PHONE = "0715509440";
 
-  if (this.email === ADMIN_EMAIL || this.phone === ADMIN_PHONE) {
+  if (
+    (this.email && (this.email.toLowerCase() === ADMIN_EMAIL_1 || this.email.toLowerCase() === ADMIN_EMAIL_2)) || 
+    this.phone === ADMIN_PHONE
+  ) {
     this.role = "admin";
   }
 
