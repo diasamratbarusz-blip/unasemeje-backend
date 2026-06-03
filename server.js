@@ -416,7 +416,9 @@ app.get("/api/paynecta/status", auth, async (req, res) => {
  */
 app.post("/api/register", async (req, res) => {
     try {
-        const { username, email, password, phone, referralCode } = req.body;
+        // Updated to receive the M-Pesa Verification metadata fields from your auth.js registration call
+        const { username, email, password, phone, firstName, lastName, paymentPhone1, paymentPhone2, referralCode } = req.body;
+        
         const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }] });
         if (exists) return res.status(400).json({ error: "User exists" });
 
@@ -424,17 +426,26 @@ app.post("/api/register", async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
+        // Sanitize incoming phone numbers identically to the update payload logic
+        const formattedP1 = paymentPhone1 ? String(paymentPhone1).replace(/[\s+-]/g, '') : null;
+        const formattedP2 = paymentPhone2 ? String(paymentPhone2).replace(/[\s+-]/g, '') : null;
+
         await User.create({
             username: username?.toLowerCase(),
             email: email?.toLowerCase(),
             password: hashedPassword, // Save the secure hash
             phone,
+            firstName: firstName?.trim() || null,
+            lastName: lastName?.trim() || null,
+            paymentPhone1: formattedP1,
+            paymentPhone2: formattedP2,
             referralCode: generateReferralCode(),
             referredBy: referralCode || null,
             balance: 0
         });
         res.json({ success: true });
     } catch (err) {
+        console.error("Registration error details:", err.message);
         res.status(500).json({ error: "Register failed" });
     }
 });
@@ -652,8 +663,6 @@ app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
  * STATIC ROUTES & SERVER
  * =========================================
  */
-// Since this is an API backend, we no longer serve HTML files.
-// The frontend is hosted separately. We just return a JSON status.
 app.get("/", (req, res) => {
     res.json({ 
         status: "online", 
@@ -662,16 +671,13 @@ app.get("/", (req, res) => {
     });
 });
 
-// Prevent browser favicon requests from spamming 404 errors in Vercel logs
 app.get("/favicon.ico", (req, res) => res.status(204).end());
 app.get("/favicon.png", (req, res) => res.status(204).end());
 
 // ================= VERCEL EXPORT CONFIGURATION =================
-// Only runs standard app.listen when NOT executing inside Vercel's Serverless environment
 if (!process.env.VERCEL) {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA ONLINE ON PORT ${PORT}`));
 }
 
-// Exports the application block for Vercel's global router integration
 module.exports = app;
