@@ -234,6 +234,14 @@ function applyFinalPrice(originalRate, name) {
  * PAYNECTA WEBHOOK (SMART PHONE MATCHING)
  * =========================================
  */
+// Added GET handler to clear "Cannot GET /api/paynecta/webhook" error on tests/pings
+app.get("/api/paynecta/webhook", (req, res) => {
+    res.status(200).json({
+        status: "active",
+        message: "Paynecta webhook endpoint is healthy and ready to receive POST requests."
+    });
+});
+
 app.post("/api/paynecta/webhook", async (req, res) => {
     try {
         const event = req.body;
