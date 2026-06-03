@@ -7,6 +7,7 @@ const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const path = require("path");
 const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs"); // Added for secure password hashing
 
 const connectDB = require("./config/db");
 const log = require("./utils/logger");
@@ -234,8 +235,6 @@ function applyFinalPrice(originalRate, name) {
  * =========================================
  */
 app.post("/api/paynecta/webhook", async (req, res) => {
-    res.status(200).send("Webhook received");
-
     try {
         const event = req.body;
         const { event_type, data } = event;
@@ -292,8 +291,12 @@ app.post("/api/paynecta/webhook", async (req, res) => {
                 }
             }
         }
+        
+        // Send response ONLY after all database processing is complete
+        res.status(200).send("Webhook received and processed");
     } catch (err) {
         log(`Webhook Processing Error: ${err.message}`);
+        res.status(500).send("Error processing webhook");
     }
 });
 
@@ -417,10 +420,14 @@ app.post("/api/register", async (req, res) => {
         const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }] });
         if (exists) return res.status(400).json({ error: "User exists" });
 
+        // HASH THE PASSWORD BEFORE SAVING
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
         await User.create({
             username: username?.toLowerCase(),
             email: email?.toLowerCase(),
-            password,
+            password: hashedPassword, // Save the secure hash
             phone,
             referralCode: generateReferralCode(),
             referredBy: referralCode || null,
@@ -432,18 +439,48 @@ app.post("/api/register", async (req, res) => {
     }
 });
 
+// ================= LOGIN LOGIC (SMART MIGRATION) =================
 app.post("/api/login", async (req, res) => {
     try {
         const { identifier, password } = req.body;
+        
+        // Find user by email or username
         const user = await User.findOne({
-            $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }],
-            password
+            $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }]
         });
+        
         if (!user) return res.status(400).json({ error: "Invalid login" });
 
-        const token = jwt.sign({ id: user._id, email: user.email, phone: user.phone }, process.env.JWT_SECRET, { expiresIn: "7d" });
+        let isMatch = false;
+        
+        // SMART PASSWORD CHECK: Detects if the DB password is plain text or a bcrypt hash
+        if (user.password && (user.password.startsWith('$2a$') || user.password.startsWith('$2b$'))) {
+            // It's a bcrypt hash, verify normally
+            isMatch = await bcrypt.compare(password, user.password);
+        } else {
+            // It's plain text (legacy), compare directly
+            isMatch = (user.password === password);
+            
+            // LAZY MIGRATION: If it matches, instantly upgrade it to a bcrypt hash!
+            if (isMatch) {
+                const salt = await bcrypt.genSalt(10);
+                user.password = await bcrypt.hash(password, salt);
+                await user.save();
+                console.log(`🔐 Security Upgrade: Plain text password hashed for ${user.username}`);
+            }
+        }
+
+        if (!isMatch) return res.status(400).json({ error: "Invalid login" });
+
+        const token = jwt.sign(
+            { id: user._id, email: user.email, phone: user.phone }, 
+            process.env.JWT_SECRET, 
+            { expiresIn: "7d" }
+        );
+        
         res.json({ token, balance: user.balance });
     } catch (err) {
+        console.error("Login error:", err);
         res.status(500).json({ error: "Login failed" });
     }
 });
@@ -457,19 +494,35 @@ app.get("/api/me", auth, async (req, res) => {
     }
 });
 
+// ================= CHANGE PASSWORD (SMART MIGRATION) =================
 app.post("/api/user/change-password", auth, async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
         const user = await User.findById(req.user.id);
         
-        if (!user || user.password !== currentPassword) {
-            return res.status(400).json({ error: "Current security configuration verification failed." });
+        if (!user) return res.status(400).json({ error: "User not found." });
+
+        let isMatch = false;
+        
+        // SMART PASSWORD CHECK
+        if (user.password && (user.password.startsWith('$2a$') || user.password.startsWith('$2b$'))) {
+            isMatch = await bcrypt.compare(currentPassword, user.password);
+        } else {
+            isMatch = (user.password === currentPassword);
+        }
+
+        if (!isMatch) {
+            return res.status(400).json({ error: "Current password is incorrect." });
         }
         
-        user.password = newPassword;
+        // Hash and save new password
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
         await user.save();
-        res.json({ success: true, message: "Security gateway update confirmed." });
+        
+        res.json({ success: true, message: "Password updated successfully." });
     } catch (err) {
+        console.error("Change password error:", err);
         res.status(500).json({ error: "Failed to process security modification." });
     }
 });
@@ -599,10 +652,19 @@ app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
  * STATIC ROUTES & SERVER
  * =========================================
  */
-const pages = ["home", "platform", "packages", "new-order", "my-orders", "services", "add-funds", "referrals", "dashboard"];
-pages.forEach(p => app.get(`/${p}`, (req, res) => res.sendFile(path.join(__dirname, "public", `${p}.html`))));
-app.get("/admin", adminAuth, (req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "home.html")));
+// Since this is an API backend, we no longer serve HTML files.
+// The frontend is hosted separately. We just return a JSON status.
+app.get("/", (req, res) => {
+    res.json({ 
+        status: "online", 
+        message: "UNASEMEJE API is running successfully.",
+        version: "1.0.0"
+    });
+});
+
+// Prevent browser favicon requests from spamming 404 errors in Vercel logs
+app.get("/favicon.ico", (req, res) => res.status(204).end());
+app.get("/favicon.png", (req, res) => res.status(204).end());
 
 // ================= VERCEL EXPORT CONFIGURATION =================
 // Only runs standard app.listen when NOT executing inside Vercel's Serverless environment
