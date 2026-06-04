@@ -442,9 +442,18 @@ app.get("/api/paynecta/status", auth, async (req, res) => {
  */
 app.post("/api/register", async (req, res) => {
     try {
-        // Updated to receive the M-Pesa Verification metadata fields from your auth.js registration call
+        // ==========================================
+        // FIELD REQUIREMENTS INDICATION
+        // COMPULSORY: email, phone, password (confirm_password is validated on frontend)
+        // OPTIONAL: username, firstName, lastName, paymentPhone1, paymentPhone2, referralCode
+        // ==========================================
         const { username, email, password, phone, firstName, lastName, paymentPhone1, paymentPhone2, referralCode } = req.body;
         
+        // Enforce compulsory fields validation
+        if (!email || !password || !phone) {
+            return res.status(400).json({ error: "Email address, primary phone number, and secure password are compulsory." });
+        }
+
         const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }] });
         if (exists) return res.status(400).json({ error: "User exists" });
 
@@ -457,7 +466,7 @@ app.post("/api/register", async (req, res) => {
         const formattedP2 = paymentPhone2 ? String(paymentPhone2).replace(/[\s+-]/g, '') : null;
 
         await User.create({
-            username: username?.toLowerCase(),
+            username: username?.toLowerCase() || null,
             email: email?.toLowerCase(),
             password: hashedPassword, // Save the secure hash
             phone,
