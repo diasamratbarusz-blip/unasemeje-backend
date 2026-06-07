@@ -181,7 +181,7 @@ function auth(req, res, next) {
 
 /**
  * =========================================
- * ADMIN AUTH
+ * ADMIN AUTH (KEPT IN CODE BUT BYPASSED FOR ADMIN ROUTES)
  * =========================================
  */
 function adminAuth(req, res, next) {
@@ -687,8 +687,12 @@ app.post("/api/deposit", auth, async (req, res) => {
     }
 });
 
+// ==========================================
+// SUPREME ADMIN ROUTES (NO PASSWORD REQUIRED)
+// ==========================================
+
 // --- ADMIN DATA FETCHING ---
-app.get("/api/admin/users", adminAuth, async (req, res) => {
+app.get("/api/admin/users", async (req, res) => {
     try {
         res.json(await User.find().select("-password").sort({ createdAt: -1 }));
     } catch (err) {
@@ -696,7 +700,7 @@ app.get("/api/admin/users", adminAuth, async (req, res) => {
     }
 });
 
-app.get("/api/admin/deposits", adminAuth, async (req, res) => {
+app.get("/api/admin/deposits", async (req, res) => {
     try {
         res.json(await Deposit.find().sort({ createdAt: -1 }));
     } catch (err) {
@@ -704,8 +708,8 @@ app.get("/api/admin/deposits", adminAuth, async (req, res) => {
     }
 });
 
-// NEW: Fetch all orders for the admin dashboard
-app.get("/api/admin/orders", adminAuth, async (req, res) => {
+// Fetch all orders for the admin dashboard
+app.get("/api/admin/orders", async (req, res) => {
     try {
         res.json(await Order.find().sort({ createdAt: -1 }));
     } catch (err) {
@@ -714,7 +718,7 @@ app.get("/api/admin/orders", adminAuth, async (req, res) => {
 });
 
 // --- ADMIN ACTIONS ---
-app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
+app.post("/api/admin/approve-deposit", async (req, res) => {
     try {
         const dep = await Deposit.findById(req.body.depositId);
         if (dep && (dep.status === "pending" || dep.status === "failed")) {
@@ -732,8 +736,8 @@ app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
     }
 });
 
-// NEW: Cancel deposit
-app.post("/api/admin/cancel-deposit", adminAuth, async (req, res) => {
+// Cancel deposit
+app.post("/api/admin/cancel-deposit", async (req, res) => {
     try {
         const dep = await Deposit.findById(req.body.depositId);
         if (dep && (dep.status === "pending" || dep.status === "failed")) {
@@ -748,8 +752,8 @@ app.post("/api/admin/cancel-deposit", adminAuth, async (req, res) => {
     }
 });
 
-// NEW: Override User Balance
-app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
+// Override User Balance
+app.post("/api/admin/update-balance", async (req, res) => {
     try {
         const { userId, amount } = req.body;
         const user = await User.findById(userId);
@@ -770,8 +774,8 @@ const settingSchema = new mongoose.Schema({
 });
 const Setting = mongoose.models.Setting || mongoose.model('Setting', settingSchema);
 
-// NEW: Broadcast Announcements
-app.post("/api/admin/announce", adminAuth, async (req, res) => {
+// Broadcast Announcements
+app.post("/api/admin/announce", async (req, res) => {
     try {
         const { message } = req.body;
         await Setting.findOneAndUpdate(
@@ -786,8 +790,8 @@ app.post("/api/admin/announce", adminAuth, async (req, res) => {
     }
 });
 
-// NEW: Toggle Maintenance Mode
-app.post("/api/admin/maintenance", adminAuth, async (req, res) => {
+// Toggle Maintenance Mode
+app.post("/api/admin/maintenance", async (req, res) => {
     try {
         const current = await Setting.findOne({ key: "maintenance" });
         const newState = !(current && current.value === true);
@@ -803,8 +807,8 @@ app.post("/api/admin/maintenance", adminAuth, async (req, res) => {
     }
 });
 
-// NEW: Clear System Cache
-app.post("/api/admin/clear-cache", adminAuth, async (req, res) => {
+// Clear System Cache
+app.post("/api/admin/clear-cache", async (req, res) => {
     try {
         // Add actual cache clearing logic here if you use Redis/Node-cache
         log("ADMIN CLEARED SYSTEM CACHE");
@@ -814,8 +818,8 @@ app.post("/api/admin/clear-cache", adminAuth, async (req, res) => {
     }
 });
 
-// NEW: Reset Failed Transactions
-app.post("/api/admin/reset-failed", adminAuth, async (req, res) => {
+// Reset Failed Transactions
+app.post("/api/admin/reset-failed", async (req, res) => {
     try {
         const result = await Order.updateMany(
             { status: { $in: ["failed", "error", "canceled"] } },
