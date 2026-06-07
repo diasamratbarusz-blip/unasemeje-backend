@@ -42,16 +42,23 @@ const app = express();
  */
 app.use(cors({
     origin: function (origin, callback) {
-        // Updated to include your live Vercel domain and potential local testing ports
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        
+        // Allow ALL your vercel.app subdomains automatically
+        if (/\.vercel\.app$/.test(origin)) {
+            return callback(null, true);
+        }
+        
+        // Allow local testing ports
         const allowedOrigins = [
-            "https://unasemeje-frontend.vercel.app",
-            "https://unasemeje-backend.vercel.app", // Added backend domain just in case
             "http://localhost:3000",
             "http://localhost:5000",
             "http://localhost:3001",
             "http://127.0.0.1:5500"
         ];
-        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+        
+        if (allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
             callback(new Error("Not allowed by CORS"));
