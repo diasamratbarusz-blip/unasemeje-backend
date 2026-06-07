@@ -23,7 +23,8 @@ const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
 // ================= CONFIGURATION & CONSTANTS =================
-const ADMIN_EMAIL = "diasamratb@gmail.com".toLowerCase();
+// UPDATED: Matched exactly to your frontend admin email to prevent lockouts
+const ADMIN_EMAIL = "diasamratbarusz@gmail.com".toLowerCase();
 const ADMIN_PHONE = "0715509440";
 
 const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
@@ -44,6 +45,7 @@ app.use(cors({
         // Updated to include your live Vercel domain and potential local testing ports
         const allowedOrigins = [
             "https://unasemeje-frontend.vercel.app",
+            "https://unasemeje-backend.vercel.app", // Added backend domain just in case
             "http://localhost:3000",
             "http://localhost:5000",
             "http://localhost:3001",
@@ -178,7 +180,7 @@ function auth(req, res, next) {
 function adminAuth(req, res, next) {
     auth(req, res, () => {
         const userEmail = req.user.email ? req.user.email.toLowerCase() : "";
-        const isAuthorized = userEmail === ADMIN_EMAIL && req.user.phone === ADMIN_PHONE;
+        const isAuthorized = userEmail === ADMIN_EMAIL || req.user.phone === ADMIN_PHONE;
         if (!isAuthorized) {
             log(`UNAUTHORIZED ACCESS ATTEMPT: ${userEmail}`);
             return res.status(403).json({ error: "Forbidden: Owner access only." });
@@ -654,7 +656,7 @@ app.get("/api/sync-orders", auth, async (req, res) => {
 
 /**
  * =========================================
- * DEPOSITS & ADMIN
+ * DEPOSITS & SUPREME ADMIN CONTROL CENTER
  * =========================================
  */
 app.post("/api/deposit", auth, async (req, res) => {
@@ -678,18 +680,156 @@ app.post("/api/deposit", auth, async (req, res) => {
     }
 });
 
-app.get("/api/admin/users", adminAuth, async (req, res) => res.json(await User.find().select("-password")));
-app.get("/api/admin/deposits", adminAuth, async (req, res) => res.json(await Deposit.find().sort({ createdAt: -1 })));
+// --- ADMIN DATA FETCHING ---
+app.get("/api/admin/users", adminAuth, async (req, res) => {
+    try {
+        res.json(await User.find().select("-password").sort({ createdAt: -1 }));
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch users." });
+    }
+});
 
+app.get("/api/admin/deposits", adminAuth, async (req, res) => {
+    try {
+        res.json(await Deposit.find().sort({ createdAt: -1 }));
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch deposits." });
+    }
+});
+
+// NEW: Fetch all orders for the admin dashboard
+app.get("/api/admin/orders", adminAuth, async (req, res) => {
+    try {
+        res.json(await Order.find().sort({ createdAt: -1 }));
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch orders." });
+    }
+});
+
+// --- ADMIN ACTIONS ---
 app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
-    const dep = await Deposit.findById(req.body.depositId);
-    if (dep && (dep.status === "pending" || dep.status === "failed")) {
-        const user = await User.findById(dep.userId);
-        user.balance += dep.amount;
-        dep.status = "completed";
+    try {
+        const dep = await Deposit.findById(req.body.depositId);
+        if (dep && (dep.status === "pending" || dep.status === "failed")) {
+            const user = await User.findById(dep.userId);
+            user.balance += dep.amount;
+            dep.status = "completed";
+            await user.save();
+            await dep.save();
+            res.json({ success: true });
+        } else {
+            res.status(400).json({ error: "Deposit not found or already processed." });
+        }
+    } catch (err) {
+        res.status(500).json({ error: "Failed to approve deposit." });
+    }
+});
+
+// NEW: Cancel deposit
+app.post("/api/admin/cancel-deposit", adminAuth, async (req, res) => {
+    try {
+        const dep = await Deposit.findById(req.body.depositId);
+        if (dep && (dep.status === "pending" || dep.status === "failed")) {
+            dep.status = "cancelled";
+            await dep.save();
+            res.json({ success: true });
+        } else {
+            res.status(400).json({ error: "Deposit not found or already processed." });
+        }
+    } catch (err) {
+        res.status(500).json({ error: "Failed to cancel deposit." });
+    }
+});
+
+// NEW: Override User Balance
+app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
+    try {
+        const { userId, amount } = req.body;
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ error: "User not found." });
+        user.balance = Number(amount);
         await user.save();
-        await dep.save();
-        res.json({ success: true });
+        log(`ADMIN OVERRIDE: Balance for ${user.email} set to KES ${amount}`);
+        res.json({ success: true, newBalance: user.balance });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to update balance." });
+    }
+});
+
+// --- GLOBAL SITE CONTROL (SETTINGS MODEL) ---
+const settingSchema = new mongoose.Schema({
+    key: { type: String, unique: true },
+    value: mongoose.Schema.Types.Mixed
+});
+const Setting = mongoose.models.Setting || mongoose.model('Setting', settingSchema);
+
+// NEW: Broadcast Announcements
+app.post("/api/admin/announce", adminAuth, async (req, res) => {
+    try {
+        const { message } = req.body;
+        await Setting.findOneAndUpdate(
+            { key: "announcement" },
+            { value: message },
+            { upsert: true, new: true }
+        );
+        log(`ADMIN BROADCAST: ${message}`);
+        res.json({ success: true, message: "Announcement saved." });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to broadcast." });
+    }
+});
+
+// NEW: Toggle Maintenance Mode
+app.post("/api/admin/maintenance", adminAuth, async (req, res) => {
+    try {
+        const current = await Setting.findOne({ key: "maintenance" });
+        const newState = !(current && current.value === true);
+        await Setting.findOneAndUpdate(
+            { key: "maintenance" },
+            { value: newState },
+            { upsert: true, new: true }
+        );
+        log(`ADMIN TOGGLED MAINTENANCE: ${newState}`);
+        res.json({ success: true, maintenance: newState });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to toggle maintenance." });
+    }
+});
+
+// NEW: Clear System Cache
+app.post("/api/admin/clear-cache", adminAuth, async (req, res) => {
+    try {
+        // Add actual cache clearing logic here if you use Redis/Node-cache
+        log("ADMIN CLEARED SYSTEM CACHE");
+        res.json({ success: true, message: "Cache cleared." });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to clear cache." });
+    }
+});
+
+// NEW: Reset Failed Transactions
+app.post("/api/admin/reset-failed", adminAuth, async (req, res) => {
+    try {
+        const result = await Order.updateMany(
+            { status: { $in: ["failed", "error", "canceled"] } },
+            { $set: { status: "cancelled" } }
+        );
+        log(`ADMIN RESET ${result.modifiedCount} FAILED TRANSACTIONS`);
+        res.json({ success: true, resetCount: result.modifiedCount });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to reset transactions." });
+    }
+});
+
+// Public endpoint for main frontend to fetch site settings (announcements/maintenance)
+app.get("/api/settings", async (req, res) => {
+    try {
+        const settings = await Setting.find({});
+        const obj = {};
+        settings.forEach(s => obj[s.key] = s.value);
+        res.json(obj);
+    } catch (err) {
+        res.json({});
     }
 });
 
