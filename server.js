@@ -49,6 +49,11 @@ app.use(cors({
         if (/\.vercel\.app$/.test(origin)) {
             return callback(null, true);
         }
+
+        // ✅ FIX: Allow your live domain (unasemeje.co.ke) and any subdomains (www, etc.)
+        if (/unasemeje\.co\.ke$/.test(origin)) {
+            return callback(null, true);
+        }
         
         // Allow local testing ports
         const allowedOrigins = [
@@ -64,13 +69,14 @@ app.use(cors({
             callback(new Error("Not allowed by CORS"));
         }
     },
-    methods: ["GET", "POST", "PUT", "DELETE"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: [
         "Content-Type",
         "Authorization",
         "X-API-Key",
         "X-User-Email"
-    ]
+    ],
+    credentials: true
 }));
 
 app.use(express.json());
