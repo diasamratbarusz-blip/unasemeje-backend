@@ -1,7 +1,7 @@
 {
   "name": "smm-panel",
   "version": "1.0.0",
-  "description": "Full-featured SMM Panel backend API with M-Pesa integration and provider sync",
+  "description": "Full-featured SMM Panel backend API with M-Pesa integration, provider sync, and Internal AI Support Bot",
   "main": "server.js",
   "license": "MIT",
 
@@ -25,7 +25,10 @@
     "backend",
     "nodejs",
     "express",
-    "mongodb"
+    "mongodb",
+    "internal-ai",
+    "chatbot",
+    "knowledge-base"
   ],
 
   "author": "SMM Panel Developer",
