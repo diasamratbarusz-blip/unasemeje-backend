@@ -852,6 +852,75 @@ app.get("/api/settings", async (req, res) => {
 
 /**
  * =========================================
+ * INTERNAL AI SUPPORT BOT (NO EXTERNAL APIs)
+ * =========================================
+ */
+// Load the internal knowledge base brain file
+let knowledgeBase = { knowledge_base: [] };
+try {
+    knowledgeBase = require("./knowledge_base.json");
+    console.log("🧠 Internal AI Knowledge Base loaded successfully.");
+} catch (err) {
+    console.warn("⚠️ knowledge_base.json not found in root directory. Internal AI will use fallback responses.");
+}
+
+// The Internal AI Engine Logic
+function processInternalAI(message) {
+    const cleanMessage = message.toLowerCase().replace(/[^\w\s]/gi, '').trim();
+    let bestMatch = null;
+    let highestScore = 0;
+
+    for (const item of knowledgeBase.knowledge_base) {
+        let score = 0;
+        for (const keyword of item.keywords) {
+            const cleanKeyword = keyword.toLowerCase();
+            // Exact phrase match (Highest priority)
+            if (cleanMessage.includes(cleanKeyword)) {
+                score += cleanKeyword.split(' ').length * 10; 
+            } 
+            // Partial word match (Fallback for typos/plurals)
+            else {
+                const messageWords = cleanMessage.split(' ');
+                for (const word of messageWords) {
+                    if (word.length > 2 && (cleanKeyword.includes(word) || word.includes(cleanKeyword))) {
+                        score += 3; 
+                    }
+                }
+            }
+        }
+        if (score > highestScore) {
+            highestScore = score;
+            bestMatch = item;
+        }
+    }
+
+    // Return answer if confident match, else fallback
+    if (bestMatch && highestScore >= 5) {
+        return bestMatch.answer;
+    }
+    
+    return "I'm not entirely sure I understand that. Could you rephrase your question? You can also type 'help' to see what I can assist you with!";
+}
+
+// AI Support Bot Endpoint
+app.post("/api/support-bot", (req, res) => {
+    const userMessage = req.body.message;
+    
+    if (!userMessage || typeof userMessage !== 'string') {
+        return res.status(400).json({ success: false, error: "A valid message string is required." });
+    }
+
+    const aiReply = processInternalAI(userMessage);
+    
+    res.json({ 
+        success: true, 
+        reply: aiReply,
+        timestamp: new Date().toISOString()
+    });
+});
+
+/**
+ * =========================================
  * STATIC ROUTES & SERVER
  * =========================================
  */
