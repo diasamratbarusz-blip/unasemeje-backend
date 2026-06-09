@@ -1,0 +1,46 @@
+{
+  "knowledge_base": [
+    {
+      "id": 1,
+      "topic": "Adding Funds",
+      "keywords": ["add funds", "deposit", "money", "wallet", "top up", "pay", "checkout", "fund account"],
+      "answer": "To add funds, go to the 'Add Funds' page. CRITICAL: You must ensure your funding details (Payment Nodes) are saved and up-to-date before depositing. Payments sent to unregistered numbers cannot be automatically tracked or credited to your wallet."
+    },
+    {
+      "id": 2,
+      "topic": "Payment Not Credited",
+      "keywords": ["money not received", "payment failed", "not credited", "where is my money", "stuck", "pending", "delayed"],
+      "answer": "If your payment is not reflecting, please verify that you sent the money from one of your 'Registered Funding Channels' listed in your profile. If it has been over 10 minutes, please contact support with your transaction code."
+    },
+    {
+      "id": 3,
+      "topic": "Changing Password",
+      "keywords": ["password", "change password", "reset password", "forgot password", "security", "login issue"],
+      "answer": "You can change your password by scrolling down to the 'Modify Security Gateway' section on the Add Funds or Dashboard page. You will need your current password to set a new one."
+    },
+    {
+      "id": 4,
+      "topic": "Updating Phone Numbers",
+      "keywords": ["change phone", "update phone", "payment nodes", "funding numbers", "add phone", "payment channels"],
+      "answer": "To update your funding numbers, go to the 'Modify Account Profile' section. You can add up to 2 Alternative Funding Nodes. Remember to click 'Save Profile Changes' before making a deposit!"
+    },
+    {
+      "id": 5,
+      "topic": "Account Balance",
+      "keywords": ["balance", "how much", "wallet balance", "check balance", "account balance"],
+      "answer": "You can check your live account balance at the very top of the 'Add Funds' page in the green header, or in the 'Account Wallet Information' card below it."
+    },
+    {
+      "id": 6,
+      "topic": "Greeting & Help",
+      "keywords": ["hello", "hi", "hey", "good morning", "help", "support", "start"],
+      "answer": "Hello! Welcome to Unasemeje Support. I can help you with adding funds, updating your profile, checking payment statuses, or changing your password. What do you need help with today?"
+    },
+    {
+      "id": 7,
+      "topic": "Payment Methods",
+      "keywords": ["mpesa", "payment method", "how to pay", "paybill", "till number"],
+      "answer": "We currently accept payments via the Paynecta checkout portal integrated on the Add Funds page. You can use M-Pesa or other supported mobile money methods directly through the secure portal."
+    }
+  ]
+}
