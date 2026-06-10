@@ -22,6 +22,24 @@ const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
+// ================= CHAT SECURITY MODELS =================
+const chatLogSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    userEmail: String,
+    username: String,
+    userMessage: String,
+    aiReply: String,
+    createdAt: { type: Date, default: Date.now }
+});
+const ChatLog = mongoose.models.ChatLog || mongoose.model('ChatLog', chatLogSchema);
+
+const chatBanSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', unique: true },
+    reason: String,
+    expiresAt: { type: Date, required: true }
+});
+const ChatBan = mongoose.models.ChatBan || mongoose.model('ChatBan', chatBanSchema);
+
 // ================= CONFIGURATION & CONSTANTS =================
 // UPDATED: Matched exactly to your frontend admin email to prevent lockouts
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com".toLowerCase();
@@ -994,7 +1012,7 @@ app.put("/api/admin/ticker/speed", async (req, res) => {
 
 /**
  * =========================================
- * INTERNAL AI SUPPORT BOT (NO EXTERNAL APIs)
+ * INTERNAL AI SUPPORT BOT (UPGRADED: SECURITY, LOGGING & LIVE SEARCH)
  * =========================================
  */
 // Load the internal knowledge base brain file
@@ -1006,8 +1024,8 @@ try {
     console.warn("⚠️ knowledge_base.json not found in root directory. Internal AI will use fallback responses.");
 }
 
-// The Internal AI Engine Logic
-function processInternalAI(message) {
+// The Upgraded Internal AI Engine Logic (Fuzzy Matching + Real-Time Context)
+function processInternalAI(message, context = {}) {
     const cleanMessage = message.toLowerCase().replace(/[^\w\s]/gi, '').trim();
     let bestMatch = null;
     let highestScore = 0;
@@ -1016,49 +1034,180 @@ function processInternalAI(message) {
         let score = 0;
         for (const keyword of item.keywords) {
             const cleanKeyword = keyword.toLowerCase();
-            // Exact phrase match (Highest priority)
+            
+            // 1. Exact phrase match (Highest priority)
             if (cleanMessage.includes(cleanKeyword)) {
-                score += cleanKeyword.split(' ').length * 10; 
+                score += cleanKeyword.split(' ').length * 15; 
             } 
-            // Partial word match (Fallback for typos/plurals)
+            // 2. Fuzzy Word Overlap (Catches typos & slang)
             else {
-                const messageWords = cleanMessage.split(' ');
-                for (const word of messageWords) {
-                    if (word.length > 2 && (cleanKeyword.includes(word) || word.includes(cleanKeyword))) {
-                        score += 3; 
+                const msgWords = cleanMessage.split(' ');
+                const keyWords = cleanKeyword.split(' ');
+                let overlap = 0;
+                for (const mw of msgWords) {
+                    for (const kw of keyWords) {
+                        if (mw.length > 2 && kw.length > 2) {
+                            if (mw.startsWith(kw.substring(0, 3)) || kw.startsWith(mw.substring(0, 3)) || mw.includes(kw) || kw.includes(mw)) {
+                                overlap++;
+                            }
+                        }
                     }
                 }
+                if (overlap > 0) score += overlap * 8;
             }
         }
+        
         if (score > highestScore) {
             highestScore = score;
             bestMatch = item;
         }
     }
 
-    // Return answer if confident match, else fallback
+    // If we have a confident match
     if (bestMatch && highestScore >= 5) {
-        return bestMatch.answer;
+        let finalAnswer = bestMatch.answer;
+        
+        // INJECT REAL-TIME DATABASE DATA IF NEEDED
+        if (bestMatch.action === 'fetch_balance') {
+            finalAnswer = finalAnswer.replace('{balance}', Number(context.balance).toLocaleString('en-KE', { minimumFractionDigits: 2 }));
+        } else if (bestMatch.action === 'fetch_orders') {
+            finalAnswer = finalAnswer.replace('{active_orders}', context.activeOrders);
+        }
+        
+        return finalAnswer;
     }
     
-    return "I'm not entirely sure I understand that. Could you rephrase your question? You can also type 'help' to see what I can assist you with!";
+    // Creative Fallback
+    return "🤔 Hmm, I'm not entirely sure about that one! You can ask me about:\n• 💰 Adding funds or checking your balance\n• 🚀 How to place an order\n• 📦 Tracking your active orders\n• 🎁 Referral bonuses\n\nOr click 'Human Support' to message the Admin directly!";
 }
 
-// AI Support Bot Endpoint
-app.post("/api/support-bot", (req, res) => {
+// 🛡️ AI ENDPOINT WITH BAN CHECK, LOGGING & LIVE SERVICE SEARCH
+app.post("/api/support-bot", auth, async (req, res) => {
     const userMessage = req.body.message;
-    
+    const userId = req.user.id; 
+
     if (!userMessage || typeof userMessage !== 'string') {
         return res.status(400).json({ success: false, error: "A valid message string is required." });
     }
 
-    const aiReply = processInternalAI(userMessage);
+    // 1. SECURITY CHECK: Is the user banned from chatting?
+    const activeBan = await ChatBan.findOne({ userId, expiresAt: { $gt: Date.now() } });
+    if (activeBan) {
+        const daysLeft = Math.ceil((activeBan.expiresAt - Date.now()) / (1000 * 60 * 60 * 24));
+        return res.json({ 
+            success: true, 
+            reply: `🚫 **Chat Restricted:** You have been restricted from using the AI Support chat for violating our terms of service. You can chat again in ${daysLeft} day(s). If you need further assistance, please use the 'Human Support' form.`,
+            isBanned: true 
+        });
+    }
+
+    // 2. Fetch real-time user data for dynamic AI responses
+    let userBalance = 0;
+    let activeOrders = 0;
+    try {
+        const user = await User.findById(userId);
+        if (user) {
+            userBalance = user.balance || 0;
+            activeOrders = await Order.countDocuments({ userId: userId, status: { $in: ['pending', 'processing'] } });
+        }
+    } catch (err) { console.warn("AI Context Error."); }
+
+    // 3. Process AI with context
+    let aiReply = processInternalAI(userMessage, { balance: userBalance, activeOrders });
     
-    res.json({ 
-        success: true, 
-        reply: aiReply,
-        timestamp: new Date().toISOString()
-    });
+    // 🛒 4. DYNAMIC LIVE SERVICE SEARCH (STRICT PROVIDER SECRECY)
+    const cleanMsg = userMessage.toLowerCase();
+    const serviceKeywords = ["service", "services", "menu", "tiktok", "instagram", "youtube", "facebook", "twitter", "telegram", "followers", "views", "likes", "subscribers", "price", "prices", "cost", "catalog", "sell"];
+    const isAskingForServices = serviceKeywords.some(k => cleanMsg.includes(k));
+
+    if (isAskingForServices) {
+        try {
+            let query = {};
+            // Smart platform detection based on user's message
+            if (cleanMsg.includes('tiktok') || cleanMsg.includes('tt')) query.platform = "TikTok";
+            else if (cleanMsg.includes('instagram') || cleanMsg.includes('ig') || cleanMsg.includes('insta')) query.platform = "Instagram";
+            else if (cleanMsg.includes('youtube') || cleanMsg.includes('yt')) query.platform = "YouTube";
+            else if (cleanMsg.includes('facebook') || cleanMsg.includes('fb')) query.platform = "Facebook";
+            else if (cleanMsg.includes('twitter') || cleanMsg.includes('x')) query.platform = "Twitter/X";
+            else if (cleanMsg.includes('telegram') || cleanMsg.includes('tg')) query.platform = "Telegram";
+
+            let services = [];
+            if (Object.keys(query).length > 0) {
+                services = await Service.find(query).limit(5); // Get top 5 for that specific platform
+            } else {
+                services = await Service.aggregate([{ $sample: { size: 5 } }]); // Get 5 random services if no platform specified
+            }
+
+            if (services.length > 0) {
+                aiReply += "\n\n📋 **Here is a quick preview of our live services & prices:**\n";
+                services.forEach(s => {
+                    // Calculate the exact price the user will pay (includes your markup)
+                    const finalRate = applyFinalPrice(s.rate, s.name);
+                    
+                    // 🔒 STRICT SECURITY LOCK: We ONLY output the Name, Platform, and Price. 
+                    // We completely ignore all other database fields to ensure the provider is NEVER revealed.
+                    aiReply += `• **${s.name}** (${s.platform}) - KES ${finalRate}/1k\n`;
+                });
+                aiReply += "\n💡 *Visit the **New Order** page to see the full menu and place your order!*";
+            } else {
+                aiReply += "\n\n📋 *Our database is updating right now! Please visit the **New Order** page to see the full live catalog.*";
+            }
+        } catch (err) {
+            console.error("AI Service Fetch Error:", err);
+        }
+    }
+
+    // 📝 5. LOGGING: Save the conversation to the database for Admin review
+    try {
+        await ChatLog.create({
+            userId,
+            userEmail: req.user.email,
+            username: req.user.username || "Unknown",
+            userMessage,
+            aiReply
+        });
+    } catch (err) { console.error("Failed to save chat log:", err); }
+
+    res.json({ success: true, reply: aiReply, timestamp: new Date().toISOString() });
+});
+
+/**
+ * =========================================
+ * ADMIN CHAT SECURITY & MODERATION
+ * =========================================
+ */
+// Fetch Chat Logs & Active Bans
+app.get("/api/admin/chat-logs", async (req, res) => {
+    try {
+        const logs = await ChatLog.find().sort({ createdAt: -1 }).limit(100);
+        const bans = await ChatBan.find({ expiresAt: { $gt: Date.now() } });
+        const bannedUserIds = bans.map(b => b.userId.toString());
+        res.json({ logs, bannedUserIds });
+    } catch (err) { res.status(500).json({ error: "Failed to fetch logs" }); }
+});
+
+// Ban User from Chat for 3 Days
+app.post("/api/admin/ban-chat", async (req, res) => {
+    try {
+        const { userId, reason } = req.body;
+        const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // Exactly 3 days
+        
+        await ChatBan.findOneAndUpdate(
+            { userId }, { userId, reason, expiresAt }, { upsert: true, new: true }
+        );
+        log(`🛡️ ADMIN CHAT BAN: User ${userId} banned for 3 days. Reason: ${reason}`);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: "Failed to ban user" }); }
+});
+
+// Unban User
+app.post("/api/admin/unban-chat", async (req, res) => {
+    try {
+        const { userId } = req.body;
+        await ChatBan.deleteOne({ userId });
+        log(`🛡️ ADMIN CHAT UNBAN: User ${userId} unbanned.`);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: "Failed to unban user" }); }
 });
 
 /**
