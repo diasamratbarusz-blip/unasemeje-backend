@@ -852,6 +852,148 @@ app.get("/api/settings", async (req, res) => {
 
 /**
  * =========================================
+ * HUMAN SUPPORT TICKET SYSTEM
+ * =========================================
+ */
+const ticketSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    userEmail: String,
+    username: String,
+    message: { type: String, required: true },
+    status: { type: String, default: 'Open' },
+    createdAt: { type: Date, default: Date.now }
+});
+const Ticket = mongoose.models.Ticket || mongoose.model('Ticket', ticketSchema);
+
+// User sends a support message
+app.post("/api/support-ticket", auth, async (req, res) => {
+    try {
+        const { message } = req.body;
+        if (!message) return res.status(400).json({ error: "Message cannot be empty." });
+
+        await Ticket.create({
+            userId: req.user.id,
+            userEmail: req.user.email,
+            username: req.user.username || "Unknown User",
+            message: message
+        });
+
+        log(`SUPPORT TICKET: New message from ${req.user.email}`);
+        res.json({ success: true, message: "Your message has been sent to the Admin." });
+    } catch (err) {
+        console.error("Ticket Error:", err);
+        res.status(500).json({ error: "Failed to send message." });
+    }
+});
+
+// Admin fetches all tickets
+app.get("/api/admin/tickets", async (req, res) => {
+    try {
+        const tickets = await Ticket.find().sort({ createdAt: -1 });
+        res.json(tickets);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch tickets." });
+    }
+});
+
+// Admin resolves a ticket
+app.post("/api/admin/resolve-ticket", async (req, res) => {
+    try {
+        const { ticketId } = req.body;
+        await Ticket.findByIdAndUpdate(ticketId, { status: 'Closed' });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to resolve ticket." });
+    }
+});
+
+/**
+ * =========================================
+ * TOP TICKER MANAGEMENT (PUBLIC & ADMIN)
+ * =========================================
+ */
+// Public: Fetch ticker items and speed
+app.get("/api/ticker", async (req, res) => {
+    try {
+        const itemsDoc = await Setting.findOne({ key: "ticker_items" });
+        const speedDoc = await Setting.findOne({ key: "ticker_speed" });
+        
+        const items = itemsDoc ? itemsDoc.value : [];
+        const speed = speedDoc ? speedDoc.value : 80; 
+        
+        res.json({ success: true, items, speed });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch ticker data." });
+    }
+});
+
+// Admin: Add new ticker item
+app.post("/api/admin/ticker/add", async (req, res) => {
+    try {
+        const { text } = req.body;
+        if (!text) return res.status(400).json({ error: "Text is required" });
+        
+        let doc = await Setting.findOne({ key: "ticker_items" });
+        if (!doc) {
+            doc = await Setting.create({ key: "ticker_items", value: [] });
+        }
+        doc.value.push(text);
+        await doc.save();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to add ticker item." });
+    }
+});
+
+// Admin: Edit existing ticker item
+app.put("/api/admin/ticker/edit", async (req, res) => {
+    try {
+        const { index, text } = req.body;
+        let doc = await Setting.findOne({ key: "ticker_items" });
+        if (!doc || !doc.value[index]) return res.status(404).json({ error: "Item not found" });
+        
+        doc.value[index] = text;
+        await doc.save();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to edit ticker item." });
+    }
+});
+
+// Admin: Delete ticker item
+app.delete("/api/admin/ticker/delete", async (req, res) => {
+    try {
+        const { index } = req.body;
+        let doc = await Setting.findOne({ key: "ticker_items" });
+        if (!doc) return res.status(404).json({ error: "No items found" });
+        
+        doc.value.splice(index, 1);
+        await doc.save();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to delete ticker item." });
+    }
+});
+
+// Admin: Update ticker animation speed
+app.put("/api/admin/ticker/speed", async (req, res) => {
+    try {
+        const { speed } = req.body;
+        if (typeof speed !== 'number' || speed <= 0) return res.status(400).json({ error: "Invalid speed" });
+        
+        await Setting.findOneAndUpdate(
+            { key: "ticker_speed" },
+            { value: speed },
+            { upsert: true, new: true }
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to update speed." });
+    }
+});
+
+/**
+ * =========================================
  * INTERNAL AI SUPPORT BOT (NO EXTERNAL APIs)
  * =========================================
  */
