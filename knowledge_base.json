@@ -1,46 +1,116 @@
 {
   "knowledge_base": [
     {
-      "id": 1,
-      "topic": "Adding Funds",
-      "keywords": ["add funds", "deposit", "money", "wallet", "top up", "pay", "checkout", "fund account"],
-      "answer": "To add funds, go to the 'Add Funds' page. CRITICAL: You must ensure your funding details (Payment Nodes) are saved and up-to-date before depositing. Payments sent to unregistered numbers cannot be automatically tracked or credited to your wallet."
+      "id": "welcome_help",
+      "topic": "Greeting & Help",
+      "keywords": ["help", "support", "what can you do", "hello", "hi", "hey", "good morning", "start", "guide"],
+      "action": null,
+      "answer": "👋 **Karibu Unasemeje Support!**\nI'm your AI Assistant. I can help you with:\n\n• 🚀 **How to place an order**\n• 💰 **Adding funds & checking balance**\n• 📦 **Tracking your orders**\n• 🎁 **Referral bonuses**\n• 🛠️ **Troubleshooting issues**\n\nJust type your question below, or use the Quick Actions on the left!"
     },
     {
-      "id": 2,
+      "id": "browse_services",
+      "topic": "Browse Services & Prices",
+      "keywords": ["services", "what do you sell", "menu", "tiktok", "instagram", "youtube", "followers", "views", "likes", "prices", "list", "available", "catalog", "how much for", "service"],
+      "action": "fetch_services",
+      "answer": "🛒 **We offer hundreds of premium, high-quality services across all major social platforms!**\n\nI can pull up some live examples for you right now. Here is what's trending:"
+    },
+    {
+      "id": "place_order",
+      "topic": "Placing an Order",
+      "keywords": ["order", "buy", "boost", "get followers", "get likes", "how to order", "place order", "new order", "nimebuy", "how to boost", "purchase"],
+      "action": null,
+      "answer": "🚀 **Placing an order is super easy!**\n1️⃣ Go to **New Order**.\n2️⃣ Pick your **Category** (IG, TikTok, etc.).\n3️⃣ Select the **Service** you want.\n4️⃣ Paste your **Profile or Post Link**.\n5️⃣ Enter **Quantity** and hit **CONFIRM BOOST**!\n\n💡 *Pro Tip: Make sure your account is PUBLIC before ordering followers or views!*"
+    },
+    {
+      "id": "add_funds",
+      "topic": "Adding Funds & Payment Methods",
+      "keywords": ["add funds", "deposit", "money", "wallet", "top up", "pay", "checkout", "fund account", "mpesa", "payment method", "how to pay", "paybill", "till number", "mjengo"],
+      "action": null,
+      "answer": "💰 **To add funds to your wallet:**\n1️⃣ Go to the **Add Funds** page.\n2️⃣ Ensure your **M-Pesa Payment Nodes** are saved in your profile!\n3️⃣ Enter the amount in the Paynecta checkout portal.\n4️⃣ Complete the M-Pesa prompt.\n\n⚡ *Deposits are auto-verified instantly! We accept M-Pesa and other mobile money methods via the secure Paynecta portal.*"
+    },
+    {
+      "id": "check_balance",
+      "topic": "Account Balance",
+      "keywords": ["balance", "how much", "wallet balance", "check balance", "account balance", "pesa", "nina pesa"],
+      "action": "fetch_balance",
+      "answer": "💰 **Your current wallet balance is KES {balance}.**\n\nGot some loose change? Top up via the **Add Funds** page and keep the aura boosting! 🚀"
+    },
+    {
+      "id": "check_orders",
+      "topic": "Checking Orders",
+      "keywords": ["my orders", "order status", "pending", "active orders", "track order", "progress"],
+      "action": "fetch_orders",
+      "answer": "📦 **You currently have {active_orders} active order(s) processing!**\n\nMost orders start within 0-5 minutes. You can track their live status on the **My Orders** page. If one gets stuck, our system auto-refunds or retries automatically!"
+    },
+    {
+      "id": "payment_not_credited",
       "topic": "Payment Not Credited",
-      "keywords": ["money not received", "payment failed", "not credited", "where is my money", "stuck", "pending", "delayed"],
-      "answer": "If your payment is not reflecting, please verify that you sent the money from one of your 'Registered Funding Channels' listed in your profile. If it has been over 10 minutes, please contact support with your transaction code."
+      "keywords": ["money not received", "payment failed", "not credited", "where is my money", "stuck", "pending", "delayed", "sent but not received", "mpesa not reflecting", "missing money"],
+      "action": null,
+      "answer": "🚨 **M-Pesa sent but not in wallet?**\n1️⃣ Did you send it from one of your **Registered Funding Channels** (Payment Nodes)?\n2️⃣ Auto-verify takes up to 5 minutes.\n3️⃣ If it's been longer, click 'Human Support' below and send us the **M-Pesa Code** so we can credit you manually! 🛠️"
     },
     {
-      "id": 3,
+      "id": "change_password",
       "topic": "Changing Password",
       "keywords": ["password", "change password", "reset password", "forgot password", "security", "login issue"],
-      "answer": "You can change your password by scrolling down to the 'Modify Security Gateway' section on the Add Funds or Dashboard page. You will need your current password to set a new one."
+      "action": null,
+      "answer": "🔒 **To change your password:**\nScroll down on the **Add Funds** or **Dashboard** page to the **'Modify Security Gateway'** section. Enter your current password and set a new one. Stay secure, boss! 🛡️"
     },
     {
-      "id": 4,
+      "id": "update_phone",
       "topic": "Updating Phone Numbers",
       "keywords": ["change phone", "update phone", "payment nodes", "funding numbers", "add phone", "payment channels"],
-      "answer": "To update your funding numbers, go to the 'Modify Account Profile' section. You can add up to 2 Alternative Funding Nodes. Remember to click 'Save Profile Changes' before making a deposit!"
+      "action": null,
+      "answer": "📱 **To update your M-Pesa numbers:**\nGo to **Add Funds** -> **'Modify Account Profile'**. You can add up to 2 Alternative Funding Nodes. \n\n⚠️ *IMPORTANT: You MUST click 'Save Profile Changes' BEFORE making a deposit, or the system won't recognize your payment!*"
     },
     {
-      "id": 5,
-      "topic": "Account Balance",
-      "keywords": ["balance", "how much", "wallet balance", "check balance", "account balance"],
-      "answer": "You can check your live account balance at the very top of the 'Add Funds' page in the green header, or in the 'Account Wallet Information' card below it."
+      "id": "pricing_rates",
+      "topic": "Pricing & Rates",
+      "keywords": ["price", "cost", "rate", "expensive", "cheap", "per 1k", "pricing"],
+      "action": null,
+      "answer": "💵 **Our Pricing:**\nAll services are priced **per 1,000 (1k)**. \n\nFor example, if a service says **KES 50/1k**, and you order **2,000 followers**, it will cost you **KES 100**!\n\n💡 *Check the 'Services' page to see the exact rate for every platform!*"
     },
     {
-      "id": 6,
-      "topic": "Greeting & Help",
-      "keywords": ["hello", "hi", "hey", "good morning", "help", "support", "start"],
-      "answer": "Hello! Welcome to Unasemeje Support. I can help you with adding funds, updating your profile, checking payment statuses, or changing your password. What do you need help with today?"
+      "id": "referral_bonus",
+      "topic": "Referral Bonus",
+      "keywords": ["refer", "referral", "bonus", "commission", "earn", "invite", "friends", "10%"],
+      "action": null,
+      "answer": "🎁 **The Unasemeje Referral Plug!**\nShare your unique referral code with your squad. Every time they buy a service, **YOU get a 10% commission** in your wallet!\n\n💸 *Passive income kwa mtandao! Check your code on the **Referrals** page.*"
     },
     {
-      "id": 7,
-      "topic": "Payment Methods",
-      "keywords": ["mpesa", "payment method", "how to pay", "paybill", "till number"],
-      "answer": "We currently accept payments via the Paynecta checkout portal integrated on the Add Funds page. You can use M-Pesa or other supported mobile money methods directly through the secure portal."
+      "id": "custom_comments",
+      "topic": "Custom Comments",
+      "keywords": ["comments", "custom comments", "write comments", "comment service"],
+      "action": null,
+      "answer": "💬 **Ordering Custom Comments:**\n1️⃣ Select a 'Custom Comments' service in **New Order**.\n2️⃣ A text box will appear instead of the quantity box.\n3️⃣ Type your comments (**one per line**).\n4️⃣ The system automatically counts them and calculates the price!\n\n🔥 *You are the director!*"
+    },
+    {
+      "id": "order_stuck",
+      "topic": "Order Stuck / Delayed",
+      "keywords": ["stuck", "not starting", "waiting", "haraka", "pole", "slow"],
+      "action": null,
+      "answer": "⏳ **Order stuck on 'Pending'?**\nDon't panic! Sometimes the provider's server is updating. \n\n1️⃣ Wait 15-30 minutes.\n2️⃣ If it still hasn't started, go to **My Orders** and click 'Sync Status'.\n3️⃣ If it failed, the money is **auto-refunded** to your wallet! ✅"
+    },
+    {
+      "id": "link_requirements",
+      "topic": "Link Requirements",
+      "keywords": ["link", "url", "profile", "post", "public", "private", "wrong link"],
+      "action": null,
+      "answer": "🔗 **Link Rules (Very Important!):**\n• **Followers/Profile Views:** Paste your PROFILE link (e.g., instagram.com/username).\n• **Likes/Views/Comments:** Paste the specific POST link.\n• ⚠️ **Your profile MUST be PUBLIC!** Private accounts cannot receive followers or views, and the order will fail."
+    },
+    {
+      "id": "cancel_order",
+      "topic": "Cancel Order / Refund",
+      "keywords": ["cancel", "cancel order", "refund", "get money back", "undo"],
+      "action": null,
+      "answer": "❌ **Can I cancel an order?**\nOnce an order is placed, it's sent to the provider instantly and **cannot be cancelled**.\n\nHowever, if the order fails or remains incomplete, the system will **automatically refund** the money back to your wallet! 💸"
+    },
+    {
+      "id": "guarantee_safety",
+      "topic": "Safety & Guarantee",
+      "keywords": ["safe", "ban", "banned", "hack", "legit", "trust"],
+      "action": null,
+      "answer": "🛡️ **Is it safe? Will I get banned?**\n100% Safe! We use premium, high-retention methods that mimic organic growth. \n\n• No passwords required (Never share your password!).\n• Safe for all accounts.\n• If an order drops, many of our premium services come with a **30-day refill guarantee**! 🔄"
     }
   ]
-}
+}  
