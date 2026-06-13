@@ -7,13 +7,12 @@ const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const path = require("path");
 const mongoose = require("mongoose");
-const bcrypt = require("bcryptjs"); // Added for secure password hashing
+const bcrypt = require("bcryptjs");
 
 const connectDB = require("./config/db");
 const log = require("./utils/logger");
 
 // ================= ROUTES =================
-// Import the Paynecta initialization route
 const paynectaInitializeRoutes = require("./api/paynecta/initialize/routes");
 
 // ================= MODELS =================
@@ -41,7 +40,6 @@ const chatBanSchema = new mongoose.Schema({
 const ChatBan = mongoose.models.ChatBan || mongoose.model('ChatBan', chatBanSchema);
 
 // ================= CONFIGURATION & CONSTANTS =================
-// UPDATED: Matched exactly to your frontend admin email to prevent lockouts
 const ADMIN_EMAIL = "diasamratbarusz@gmail.com".toLowerCase();
 const ADMIN_PHONE = "0715509440";
 
@@ -60,20 +58,16 @@ const app = express();
  */
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
         
-        // Allow ALL your vercel.app subdomains automatically
         if (/\.vercel\.app$/.test(origin)) {
             return callback(null, true);
         }
 
-        // ✅ FIX: Allow your live domain (unasemeje.co.ke) and any subdomains (www, etc.)
         if (/unasemeje\.co\.ke$/.test(origin)) {
             return callback(null, true);
         }
         
-        // Allow local testing ports
         const allowedOrigins = [
             "http://localhost:3000",
             "http://localhost:5000",
@@ -97,20 +91,17 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.static(path.join(__dirname, "public")));
 
-// Mount the Paynecta initialize route
 app.use(paynectaInitializeRoutes);
 
 /**
  * =========================================
  * VERCEL COMPATIBLE DATABASE MIDDLEWARE
- * Ensures database connectivity during serverless execution loops
  * =========================================
  */
-// Cache the connection promise to prevent multiple concurrent connections on cold start
 let dbConnectPromise = null;
 
 app.use(async (req, res, next) => {
@@ -131,7 +122,6 @@ app.use(async (req, res, next) => {
 /**
  * =========================================
  * DATABASE CONNECTION (TRADITIONAL INSTANCE RUNTIME)
- * Only runs when NOT in Vercel to prevent cold-start latency and unnecessary API calls
  * =========================================
  */
 if (!process.env.VERCEL) {
@@ -205,7 +195,7 @@ function auth(req, res, next) {
 
 /**
  * =========================================
- * ADMIN AUTH (KEPT IN CODE BUT BYPASSED FOR ADMIN ROUTES)
+ * ADMIN AUTH
  * =========================================
  */
 function adminAuth(req, res, next) {
@@ -271,10 +261,9 @@ function applyFinalPrice(originalRate, name) {
 
 /**
  * =========================================
- * PAYNECTA WEBHOOK (SMART PHONE MATCHING)
+ * PAYNECTA WEBHOOK
  * =========================================
  */
-// Webhook processing logic extracted to support multiple URL paths cleanly
 const handlePaynectaWebhook = async (req, res) => {
     try {
         const event = req.body;
@@ -333,7 +322,6 @@ const handlePaynectaWebhook = async (req, res) => {
             }
         }
         
-        // Send response ONLY after all database processing is complete
         res.status(200).send("Webhook received and processed");
     } catch (err) {
         log(`Webhook Processing Error: ${err.message}`);
@@ -341,7 +329,6 @@ const handlePaynectaWebhook = async (req, res) => {
     }
 };
 
-// Support BOTH /api/webhook and /api/paynecta/webhook to guarantee no "Cannot GET" errors
 app.get("/api/webhook", (req, res) => {
     res.status(200).json({
         status: "active",
@@ -361,7 +348,7 @@ app.post("/api/paynecta/webhook", handlePaynectaWebhook);
 
 /**
  * =========================================
- * PAYMENT PROFILE ENDPOINTS (UPDATED FOR COMPATIBILITY)
+ * PAYMENT PROFILE ENDPOINTS
  * =========================================
  */
 const handleProfileUpdate = async (req, res) => {
@@ -475,14 +462,8 @@ app.get("/api/paynecta/status", auth, async (req, res) => {
  */
 app.post("/api/register", async (req, res) => {
     try {
-        // ==========================================
-        // FIELD REQUIREMENTS INDICATION
-        // COMPULSORY: email, phone, password (confirm_password is validated on frontend)
-        // OPTIONAL: username, firstName, lastName, paymentPhone1, paymentPhone2, referralCode
-        // ==========================================
         const { username, email, password, phone, firstName, lastName, paymentPhone1, paymentPhone2, referralCode } = req.body;
         
-        // Enforce compulsory fields validation
         if (!email || !password || !phone) {
             return res.status(400).json({ error: "Email address, primary phone number, and secure password are compulsory." });
         }
@@ -490,18 +471,16 @@ app.post("/api/register", async (req, res) => {
         const exists = await User.findOne({ $or: [{ email: email?.toLowerCase() }, { phone }] });
         if (exists) return res.status(400).json({ error: "User exists" });
 
-        // HASH THE PASSWORD BEFORE SAVING
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Sanitize incoming phone numbers identically to the update payload logic
         const formattedP1 = paymentPhone1 ? String(paymentPhone1).replace(/[\s+-]/g, '') : null;
         const formattedP2 = paymentPhone2 ? String(paymentPhone2).replace(/[\s+-]/g, '') : null;
 
         await User.create({
             username: username?.toLowerCase() || null,
             email: email?.toLowerCase(),
-            password: hashedPassword, // Save the secure hash
+            password: hashedPassword,
             phone,
             firstName: firstName?.trim() || null,
             lastName: lastName?.trim() || null,
@@ -518,12 +497,10 @@ app.post("/api/register", async (req, res) => {
     }
 });
 
-// ================= LOGIN LOGIC (SMART MIGRATION) =================
 app.post("/api/login", async (req, res) => {
     try {
         const { identifier, password } = req.body;
         
-        // Find user by email or username
         const user = await User.findOne({
             $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }]
         });
@@ -532,15 +509,11 @@ app.post("/api/login", async (req, res) => {
 
         let isMatch = false;
         
-        // SMART PASSWORD CHECK: Detects if the DB password is plain text or a bcrypt hash
         if (user.password && (user.password.startsWith('$2a$') || user.password.startsWith('$2b$'))) {
-            // It's a bcrypt hash, verify normally
             isMatch = await bcrypt.compare(password, user.password);
         } else {
-            // It's plain text (legacy), compare directly
             isMatch = (user.password === password);
             
-            // LAZY MIGRATION: If it matches, instantly upgrade it to a bcrypt hash!
             if (isMatch) {
                 const salt = await bcrypt.genSalt(10);
                 user.password = await bcrypt.hash(password, salt);
@@ -573,7 +546,6 @@ app.get("/api/me", auth, async (req, res) => {
     }
 });
 
-// ================= CHANGE PASSWORD (SMART MIGRATION) =================
 app.post("/api/user/change-password", auth, async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
@@ -583,7 +555,6 @@ app.post("/api/user/change-password", auth, async (req, res) => {
 
         let isMatch = false;
         
-        // SMART PASSWORD CHECK
         if (user.password && (user.password.startsWith('$2a$') || user.password.startsWith('$2b$'))) {
             isMatch = await bcrypt.compare(currentPassword, user.password);
         } else {
@@ -594,7 +565,6 @@ app.post("/api/user/change-password", auth, async (req, res) => {
             return res.status(400).json({ error: "Current password is incorrect." });
         }
         
-        // Hash and save new password
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(newPassword, salt);
         await user.save();
@@ -712,10 +682,9 @@ app.post("/api/deposit", auth, async (req, res) => {
 });
 
 // ==========================================
-// SUPREME ADMIN ROUTES (NO PASSWORD REQUIRED)
+// SUPREME ADMIN ROUTES
 // ==========================================
 
-// --- ADMIN DATA FETCHING ---
 app.get("/api/admin/users", async (req, res) => {
     try {
         res.json(await User.find().select("-password").sort({ createdAt: -1 }));
@@ -732,7 +701,6 @@ app.get("/api/admin/deposits", async (req, res) => {
     }
 });
 
-// Fetch all orders for the admin dashboard
 app.get("/api/admin/orders", async (req, res) => {
     try {
         res.json(await Order.find().sort({ createdAt: -1 }));
@@ -741,7 +709,6 @@ app.get("/api/admin/orders", async (req, res) => {
     }
 });
 
-// --- ADMIN ACTIONS ---
 app.post("/api/admin/approve-deposit", async (req, res) => {
     try {
         const dep = await Deposit.findById(req.body.depositId);
@@ -760,7 +727,6 @@ app.post("/api/admin/approve-deposit", async (req, res) => {
     }
 });
 
-// Cancel deposit
 app.post("/api/admin/cancel-deposit", async (req, res) => {
     try {
         const dep = await Deposit.findById(req.body.depositId);
@@ -776,7 +742,6 @@ app.post("/api/admin/cancel-deposit", async (req, res) => {
     }
 });
 
-// Override User Balance
 app.post("/api/admin/update-balance", async (req, res) => {
     try {
         const { userId, amount } = req.body;
@@ -791,14 +756,13 @@ app.post("/api/admin/update-balance", async (req, res) => {
     }
 });
 
-// --- GLOBAL SITE CONTROL (SETTINGS MODEL) ---
+// --- GLOBAL SITE CONTROL ---
 const settingSchema = new mongoose.Schema({
     key: { type: String, unique: true },
     value: mongoose.Schema.Types.Mixed
 });
 const Setting = mongoose.models.Setting || mongoose.model('Setting', settingSchema);
 
-// Broadcast Announcements
 app.post("/api/admin/announce", async (req, res) => {
     try {
         const { message } = req.body;
@@ -814,11 +778,20 @@ app.post("/api/admin/announce", async (req, res) => {
     }
 });
 
-// Toggle Maintenance Mode
 app.post("/api/admin/maintenance", async (req, res) => {
     try {
-        const current = await Setting.findOne({ key: "maintenance" });
-        const newState = !(current && current.value === true);
+        const { action } = req.body;
+        let newState;
+        
+        if (action === "on") {
+            newState = true;
+        } else if (action === "off") {
+            newState = false;
+        } else {
+            const current = await Setting.findOne({ key: "maintenance" });
+            newState = !(current && current.value === true);
+        }
+        
         await Setting.findOneAndUpdate(
             { key: "maintenance" },
             { value: newState },
@@ -831,10 +804,8 @@ app.post("/api/admin/maintenance", async (req, res) => {
     }
 });
 
-// Clear System Cache
 app.post("/api/admin/clear-cache", async (req, res) => {
     try {
-        // Add actual cache clearing logic here if you use Redis/Node-cache
         log("ADMIN CLEARED SYSTEM CACHE");
         res.json({ success: true, message: "Cache cleared." });
     } catch (err) {
@@ -842,7 +813,6 @@ app.post("/api/admin/clear-cache", async (req, res) => {
     }
 });
 
-// Reset Failed Transactions
 app.post("/api/admin/reset-failed", async (req, res) => {
     try {
         const result = await Order.updateMany(
@@ -856,7 +826,6 @@ app.post("/api/admin/reset-failed", async (req, res) => {
     }
 });
 
-// Public endpoint for main frontend to fetch site settings (announcements/maintenance)
 app.get("/api/settings", async (req, res) => {
     try {
         const settings = await Setting.find({});
@@ -883,7 +852,6 @@ const ticketSchema = new mongoose.Schema({
 });
 const Ticket = mongoose.models.Ticket || mongoose.model('Ticket', ticketSchema);
 
-// User sends a support message
 app.post("/api/support-ticket", auth, async (req, res) => {
     try {
         const { message } = req.body;
@@ -904,7 +872,6 @@ app.post("/api/support-ticket", auth, async (req, res) => {
     }
 });
 
-// Admin fetches all tickets
 app.get("/api/admin/tickets", async (req, res) => {
     try {
         const tickets = await Ticket.find().sort({ createdAt: -1 });
@@ -914,7 +881,6 @@ app.get("/api/admin/tickets", async (req, res) => {
     }
 });
 
-// Admin resolves a ticket
 app.post("/api/admin/resolve-ticket", async (req, res) => {
     try {
         const { ticketId } = req.body;
@@ -927,95 +893,171 @@ app.post("/api/admin/resolve-ticket", async (req, res) => {
 
 /**
  * =========================================
- * TOP TICKER MANAGEMENT (PUBLIC & ADMIN)
+ * TOP TICKER MANAGEMENT (FIXED FOR VERCEL)
  * =========================================
  */
-// Public: Fetch ticker items and speed
 app.get("/api/ticker", async (req, res) => {
     try {
         const itemsDoc = await Setting.findOne({ key: "ticker_items" });
         const speedDoc = await Setting.findOne({ key: "ticker_speed" });
         
-        const items = itemsDoc ? itemsDoc.value : [];
-        const speed = speedDoc ? speedDoc.value : 80; 
+        const items = itemsDoc && Array.isArray(itemsDoc.value) ? itemsDoc.value : [];
+        const speed = speedDoc && typeof speedDoc.value === 'number' ? speedDoc.value : 80; 
         
         res.json({ success: true, items, speed });
     } catch (err) {
-        res.status(500).json({ error: "Failed to fetch ticker data." });
+        console.error("Ticker fetch error:", err);
+        res.json({ success: true, items: [], speed: 80 });
     }
 });
 
-// Admin: Add new ticker item
+// Admin: Get ticker with full details
+app.get("/api/admin/ticker", async (req, res) => {
+    try {
+        const itemsDoc = await Setting.findOne({ key: "ticker_items" });
+        const speedDoc = await Setting.findOne({ key: "ticker_speed" });
+        
+        const items = itemsDoc && Array.isArray(itemsDoc.value) ? itemsDoc.value : [];
+        const speed = speedDoc && typeof speedDoc.value === 'number' ? speedDoc.value : 80;
+        
+        res.json({ success: true, items, speed });
+    } catch (err) {
+        console.error("Admin ticker fetch error:", err);
+        res.status(500).json({ success: false, error: "Failed to fetch ticker data", items: [], speed: 80 });
+    }
+});
+
+// Admin: Add new ticker item (FIXED)
 app.post("/api/admin/ticker/add", async (req, res) => {
     try {
         const { text } = req.body;
-        if (!text) return res.status(400).json({ error: "Text is required" });
         
-        let doc = await Setting.findOne({ key: "ticker_items" });
-        if (!doc) {
-            doc = await Setting.create({ key: "ticker_items", value: [] });
+        console.log('[TICKER ADD] Received request:', { text });
+        
+        if (!text || typeof text !== 'string' || text.trim().length === 0) {
+            return res.status(400).json({ success: false, error: "Text is required and cannot be empty" });
         }
-        doc.value.push(text);
-        await doc.save();
-        res.json({ success: true });
+        
+        const cleanText = text.trim();
+        
+        // Use findOneAndUpdate with $push to atomically add to array
+        const result = await Setting.findOneAndUpdate(
+            { key: "ticker_items" },
+            { $push: { value: cleanText } },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+        
+        console.log('[TICKER ADD] Success. New items count:', result.value.length);
+        
+        res.json({ 
+            success: true, 
+            message: "Ticker item added successfully",
+            itemCount: result.value.length
+        });
     } catch (err) {
-        res.status(500).json({ error: "Failed to add ticker item." });
+        console.error('[TICKER ADD] Error:', err);
+        res.status(500).json({ success: false, error: "Failed to add ticker item: " + err.message });
     }
 });
 
-// Admin: Edit existing ticker item
+// Admin: Edit existing ticker item (FIXED)
 app.put("/api/admin/ticker/edit", async (req, res) => {
     try {
         const { index, text } = req.body;
-        let doc = await Setting.findOne({ key: "ticker_items" });
-        if (!doc || !doc.value[index]) return res.status(404).json({ error: "Item not found" });
         
-        doc.value[index] = text;
+        console.log('[TICKER EDIT] Received request:', { index, text });
+        
+        if (typeof index !== 'number' || index < 0) {
+            return res.status(400).json({ success: false, error: "Valid index is required" });
+        }
+        
+        if (!text || typeof text !== 'string' || text.trim().length === 0) {
+            return res.status(400).json({ success: false, error: "Text is required and cannot be empty" });
+        }
+        
+        const cleanText = text.trim();
+        const doc = await Setting.findOne({ key: "ticker_items" });
+        
+        if (!doc || !Array.isArray(doc.value) || !doc.value[index]) {
+            return res.status(404).json({ success: false, error: "Item not found at specified index" });
+        }
+        
+        doc.value[index] = cleanText;
         await doc.save();
-        res.json({ success: true });
+        
+        console.log('[TICKER EDIT] Success');
+        
+        res.json({ success: true, message: "Ticker item updated successfully" });
     } catch (err) {
-        res.status(500).json({ error: "Failed to edit ticker item." });
+        console.error('[TICKER EDIT] Error:', err);
+        res.status(500).json({ success: false, error: "Failed to edit ticker item: " + err.message });
     }
 });
 
-// Admin: Delete ticker item
+// Admin: Delete ticker item (FIXED)
 app.delete("/api/admin/ticker/delete", async (req, res) => {
     try {
         const { index } = req.body;
-        let doc = await Setting.findOne({ key: "ticker_items" });
-        if (!doc) return res.status(404).json({ error: "No items found" });
+        
+        console.log('[TICKER DELETE] Received request:', { index });
+        
+        if (typeof index !== 'number' || index < 0) {
+            return res.status(400).json({ success: false, error: "Valid index is required" });
+        }
+        
+        const doc = await Setting.findOne({ key: "ticker_items" });
+        
+        if (!doc || !Array.isArray(doc.value)) {
+            return res.status(404).json({ success: false, error: "No ticker items found" });
+        }
+        
+        if (index >= doc.value.length) {
+            return res.status(404).json({ success: false, error: "Index out of range" });
+        }
         
         doc.value.splice(index, 1);
         await doc.save();
-        res.json({ success: true });
+        
+        console.log('[TICKER DELETE] Success. Remaining items:', doc.value.length);
+        
+        res.json({ success: true, message: "Ticker item deleted successfully" });
     } catch (err) {
-        res.status(500).json({ error: "Failed to delete ticker item." });
+        console.error('[TICKER DELETE] Error:', err);
+        res.status(500).json({ success: false, error: "Failed to delete ticker item: " + err.message });
     }
 });
 
-// Admin: Update ticker animation speed
+// Admin: Update ticker animation speed (FIXED)
 app.put("/api/admin/ticker/speed", async (req, res) => {
     try {
         const { speed } = req.body;
-        if (typeof speed !== 'number' || speed <= 0) return res.status(400).json({ error: "Invalid speed" });
+        
+        console.log('[TICKER SPEED] Received request:', { speed });
+        
+        if (typeof speed !== 'number' || speed < 5 || speed > 300) {
+            return res.status(400).json({ success: false, error: "Speed must be a number between 5 and 300" });
+        }
         
         await Setting.findOneAndUpdate(
             { key: "ticker_speed" },
             { value: speed },
             { upsert: true, new: true }
         );
-        res.json({ success: true });
+        
+        console.log('[TICKER SPEED] Success');
+        
+        res.json({ success: true, message: "Ticker speed updated successfully" });
     } catch (err) {
-        res.status(500).json({ error: "Failed to update speed." });
+        console.error('[TICKER SPEED] Error:', err);
+        res.status(500).json({ success: false, error: "Failed to update speed: " + err.message });
     }
 });
 
 /**
  * =========================================
- * INTERNAL AI SUPPORT BOT (UPGRADED: SECURITY, LOGGING & LIVE SEARCH)
+ * INTERNAL AI SUPPORT BOT
  * =========================================
  */
-// Load the internal knowledge base brain file
 let knowledgeBase = { knowledge_base: [] };
 try {
     knowledgeBase = require("./knowledge_base.json");
@@ -1024,7 +1066,6 @@ try {
     console.warn("⚠️ knowledge_base.json not found in root directory. Internal AI will use fallback responses.");
 }
 
-// The Upgraded Internal AI Engine Logic (Fuzzy Matching + Real-Time Context)
 function processInternalAI(message, context = {}) {
     const cleanMessage = message.toLowerCase().replace(/[^\w\s]/gi, '').trim();
     let bestMatch = null;
@@ -1035,12 +1076,9 @@ function processInternalAI(message, context = {}) {
         for (const keyword of item.keywords) {
             const cleanKeyword = keyword.toLowerCase();
             
-            // 1. Exact phrase match (Highest priority)
             if (cleanMessage.includes(cleanKeyword)) {
                 score += cleanKeyword.split(' ').length * 15; 
-            } 
-            // 2. Fuzzy Word Overlap (Catches typos & slang)
-            else {
+            } else {
                 const msgWords = cleanMessage.split(' ');
                 const keyWords = cleanKeyword.split(' ');
                 let overlap = 0;
@@ -1063,11 +1101,9 @@ function processInternalAI(message, context = {}) {
         }
     }
 
-    // If we have a confident match
     if (bestMatch && highestScore >= 5) {
         let finalAnswer = bestMatch.answer;
         
-        // INJECT REAL-TIME DATABASE DATA IF NEEDED
         if (bestMatch.action === 'fetch_balance') {
             finalAnswer = finalAnswer.replace('{balance}', Number(context.balance).toLocaleString('en-KE', { minimumFractionDigits: 2 }));
         } else if (bestMatch.action === 'fetch_orders') {
@@ -1077,11 +1113,9 @@ function processInternalAI(message, context = {}) {
         return finalAnswer;
     }
     
-    // Creative Fallback
     return "🤔 Hmm, I'm not entirely sure about that one! You can ask me about:\n• 💰 Adding funds or checking your balance\n• 🚀 How to place an order\n• 📦 Tracking your active orders\n• 🎁 Referral bonuses\n\nOr click 'Human Support' to message the Admin directly!";
 }
 
-// 🛡️ AI ENDPOINT WITH BAN CHECK, LOGGING & LIVE SERVICE SEARCH
 app.post("/api/support-bot", auth, async (req, res) => {
     const userMessage = req.body.message;
     const userId = req.user.id; 
@@ -1090,7 +1124,6 @@ app.post("/api/support-bot", auth, async (req, res) => {
         return res.status(400).json({ success: false, error: "A valid message string is required." });
     }
 
-    // 1. SECURITY CHECK: Is the user banned from chatting?
     const activeBan = await ChatBan.findOne({ userId, expiresAt: { $gt: Date.now() } });
     if (activeBan) {
         const daysLeft = Math.ceil((activeBan.expiresAt - Date.now()) / (1000 * 60 * 60 * 24));
@@ -1101,7 +1134,6 @@ app.post("/api/support-bot", auth, async (req, res) => {
         });
     }
 
-    // 2. Fetch real-time user data for dynamic AI responses
     let userBalance = 0;
     let activeOrders = 0;
     try {
@@ -1112,10 +1144,8 @@ app.post("/api/support-bot", auth, async (req, res) => {
         }
     } catch (err) { console.warn("AI Context Error."); }
 
-    // 3. Process AI with context
     let aiReply = processInternalAI(userMessage, { balance: userBalance, activeOrders });
     
-    // 🛒 4. DYNAMIC LIVE SERVICE SEARCH (STRICT PROVIDER SECRECY)
     const cleanMsg = userMessage.toLowerCase();
     const serviceKeywords = ["service", "services", "menu", "tiktok", "instagram", "youtube", "facebook", "twitter", "telegram", "followers", "views", "likes", "subscribers", "price", "prices", "cost", "catalog", "sell"];
     const isAskingForServices = serviceKeywords.some(k => cleanMsg.includes(k));
@@ -1123,7 +1153,6 @@ app.post("/api/support-bot", auth, async (req, res) => {
     if (isAskingForServices) {
         try {
             let query = {};
-            // Smart platform detection based on user's message
             if (cleanMsg.includes('tiktok') || cleanMsg.includes('tt')) query.platform = "TikTok";
             else if (cleanMsg.includes('instagram') || cleanMsg.includes('ig') || cleanMsg.includes('insta')) query.platform = "Instagram";
             else if (cleanMsg.includes('youtube') || cleanMsg.includes('yt')) query.platform = "YouTube";
@@ -1133,19 +1162,15 @@ app.post("/api/support-bot", auth, async (req, res) => {
 
             let services = [];
             if (Object.keys(query).length > 0) {
-                services = await Service.find(query).limit(5); // Get top 5 for that specific platform
+                services = await Service.find(query).limit(5);
             } else {
-                services = await Service.aggregate([{ $sample: { size: 5 } }]); // Get 5 random services if no platform specified
+                services = await Service.aggregate([{ $sample: { size: 5 } }]);
             }
 
             if (services.length > 0) {
                 aiReply += "\n\n📋 **Here is a quick preview of our live services & prices:**\n";
                 services.forEach(s => {
-                    // Calculate the exact price the user will pay (includes your markup)
                     const finalRate = applyFinalPrice(s.rate, s.name);
-                    
-                    // 🔒 STRICT SECURITY LOCK: We ONLY output the Name, Platform, and Price. 
-                    // We completely ignore all other database fields to ensure the provider is NEVER revealed.
                     aiReply += `• **${s.name}** (${s.platform}) - KES ${finalRate}/1k\n`;
                 });
                 aiReply += "\n💡 *Visit the **New Order** page to see the full menu and place your order!*";
@@ -1157,7 +1182,6 @@ app.post("/api/support-bot", auth, async (req, res) => {
         }
     }
 
-    // 📝 5. LOGGING: Save the conversation to the database for Admin review
     try {
         await ChatLog.create({
             userId,
@@ -1176,7 +1200,6 @@ app.post("/api/support-bot", auth, async (req, res) => {
  * ADMIN CHAT SECURITY & MODERATION
  * =========================================
  */
-// Fetch Chat Logs & Active Bans
 app.get("/api/admin/chat-logs", async (req, res) => {
     try {
         const logs = await ChatLog.find().sort({ createdAt: -1 }).limit(100);
@@ -1186,11 +1209,10 @@ app.get("/api/admin/chat-logs", async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Failed to fetch logs" }); }
 });
 
-// Ban User from Chat for 3 Days
 app.post("/api/admin/ban-chat", async (req, res) => {
     try {
         const { userId, reason } = req.body;
-        const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // Exactly 3 days
+        const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
         
         await ChatBan.findOneAndUpdate(
             { userId }, { userId, reason, expiresAt }, { upsert: true, new: true }
@@ -1200,7 +1222,6 @@ app.post("/api/admin/ban-chat", async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Failed to ban user" }); }
 });
 
-// Unban User
 app.post("/api/admin/unban-chat", async (req, res) => {
     try {
         const { userId } = req.body;
