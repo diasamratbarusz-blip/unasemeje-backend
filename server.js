@@ -236,17 +236,21 @@ async function giveReferralBonus(userId, orderCost) {
 }
 
 function cleanServiceName(name = "") {
-    return String(name || "").replace(/\\/g, "").replace(/\[.*?\]/g, "").trim() || "SMM Service";
+    // FIXED: Only remove backslashes, preserve all other text including brackets
+    return String(name || "").replace(/\\/g, "").trim() || "SMM Service";
 }
 
 function detectPlatform(service = {}) {
     const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
+    
+    // FIXED: More robust platform detection with additional keywords
     if (/(instagram|insta|ig)/.test(text)) return "Instagram";
     if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
     if (/(youtube|yt)/.test(text)) return "YouTube";
-    if (/(facebook|fb)/.test(text)) return "Facebook";
-    if (/(twitter|x)/.test(text)) return "Twitter/X";
+    if (/(facebook|fb|post likes|post views|post comments|page likes|page followers|video views|reel|story)/.test(text)) return "Facebook";
+    if (/(twitter|x\.com|x post|retweet)/.test(text)) return "Twitter/X";
     if (/(telegram|tg)/.test(text)) return "Telegram";
+    
     return "Other";
 }
 
@@ -578,39 +582,85 @@ app.post("/api/user/change-password", auth, async (req, res) => {
 
 /**
  * =========================================
- * SMM SERVICES & ORDERS
+ * SMM SERVICES & ORDERS (FIXED FOR ALL CATEGORIES)
  * =========================================
  */
 app.get("/api/services", async (req, res) => {
     try {
         let services = await Service.find();
+        
+        // Force refresh if requested or if no services exist
         if (!services.length || req.query.refresh === "true") {
-            const response = await axios.get(`https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`);
+            console.log("🔄 Fetching fresh services from Delixgains provider...");
+            
+            const response = await axios.get(
+                `https://delixgainske.com/api/v2?action=services&key=${process.env.SMM_API_KEY}`
+            );
+            
             const list = Array.isArray(response.data) ? response.data : [];
+            
             if (list.length > 0) {
+                console.log(`📦 Received ${list.length} services from provider`);
+                
+                // Clear existing services
                 await Service.deleteMany({});
-                const mapped = list.map(s => ({
-                    serviceId: String(s.service),
-                    name: cleanServiceName(s.name),
-                    rate: Number(s.rate || 0),
-                    min: Number(s.min || 1),
-                    max: Number(s.max || 10000),
-                    category: s.category || "General",
-                    platform: detectPlatform(s)
-                }));
+                
+                // Map services with EXACT category names from provider
+                const mapped = list.map(s => {
+                    // FIXED: Preserve EXACT category name from provider
+                    const categoryName = String(s.category || "General").trim();
+                    // FIXED: Only clean backslashes, preserve brackets and all text
+                    const serviceName = cleanServiceName(s.name);
+                    const platform = detectPlatform(s);
+                    
+                    console.log(`📝 Service: "${serviceName}" | Category: "${categoryName}" | Platform: ${platform}`);
+                    
+                    return {
+                        serviceId: String(s.service),
+                        name: serviceName,
+                        rate: Number(s.rate || 0),
+                        min: Number(s.min || 1),
+                        max: Number(s.max || 10000),
+                        category: categoryName, // PRESERVE EXACT CATEGORY NAME FROM PROVIDER
+                        platform: platform,
+                        type: s.type || "", // Store service type for comment detection
+                        description: s.description || "" // Store description if available
+                    };
+                });
+                
                 await Service.insertMany(mapped);
+                console.log(`✅ Saved ${mapped.length} services to database`);
                 services = await Service.find();
             }
         }
+        
+        // Group services by platform and category (EXACT STRUCTURE FROM PROVIDER)
         const grouped = {};
         services.forEach(s => {
-            if (!grouped[s.platform]) grouped[s.platform] = {};
-            if (!grouped[s.platform][s.category]) grouped[s.platform][s.category] = [];
-            grouped[s.platform][s.category].push({ ...s.toObject(), rate: applyFinalPrice(s.rate, s.name) });
+            if (!grouped[s.platform]) {
+                grouped[s.platform] = {};
+            }
+            if (!grouped[s.platform][s.category]) {
+                grouped[s.platform][s.category] = [];
+            }
+            grouped[s.platform][s.category].push({ 
+                ...s.toObject(), 
+                rate: applyFinalPrice(s.rate, s.name) 
+            });
         });
+        
+        // Log the structure for debugging
+        Object.keys(grouped).forEach(platform => {
+            const categories = Object.keys(grouped[platform]);
+            const totalServices = categories.reduce((sum, cat) => sum + grouped[platform][cat].length, 0);
+            console.log(`📊 ${platform}: ${categories.length} categories, ${totalServices} services`);
+            console.log(`   Categories: ${categories.join(", ")}`);
+        });
+        
         res.json({ success: true, data: grouped });
     } catch (err) {
-        res.status(500).json({ error: "Service error" });
+        console.error("❌ Service fetch error:", err.message);
+        res.status(500).json({ error: "Service error: " + err.message });
     }
 });
 
@@ -911,7 +961,6 @@ app.get("/api/ticker", async (req, res) => {
     }
 });
 
-// Admin: Get ticker with full details
 app.get("/api/admin/ticker", async (req, res) => {
     try {
         const itemsDoc = await Setting.findOne({ key: "ticker_items" });
@@ -927,7 +976,6 @@ app.get("/api/admin/ticker", async (req, res) => {
     }
 });
 
-// Admin: Add new ticker item (FIXED)
 app.post("/api/admin/ticker/add", async (req, res) => {
     try {
         const { text } = req.body;
@@ -940,7 +988,6 @@ app.post("/api/admin/ticker/add", async (req, res) => {
         
         const cleanText = text.trim();
         
-        // Use findOneAndUpdate with $push to atomically add to array
         const result = await Setting.findOneAndUpdate(
             { key: "ticker_items" },
             { $push: { value: cleanText } },
@@ -960,7 +1007,6 @@ app.post("/api/admin/ticker/add", async (req, res) => {
     }
 });
 
-// Admin: Edit existing ticker item (FIXED)
 app.put("/api/admin/ticker/edit", async (req, res) => {
     try {
         const { index, text } = req.body;
@@ -994,7 +1040,6 @@ app.put("/api/admin/ticker/edit", async (req, res) => {
     }
 });
 
-// Admin: Delete ticker item (FIXED)
 app.delete("/api/admin/ticker/delete", async (req, res) => {
     try {
         const { index } = req.body;
@@ -1027,7 +1072,6 @@ app.delete("/api/admin/ticker/delete", async (req, res) => {
     }
 });
 
-// Admin: Update ticker animation speed (FIXED)
 app.put("/api/admin/ticker/speed", async (req, res) => {
     try {
         const { speed } = req.body;
