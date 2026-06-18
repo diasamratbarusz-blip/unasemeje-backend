@@ -3,149 +3,205 @@
     {
       "id": "welcome_help",
       "topic": "Greeting & Help",
-      "keywords": ["help", "support", "what can you do", "hello", "hi", "hey", "good morning", "start", "guide", "mambo", "niaje", "sasa", "vipi", "assistance", "menu", "options", "features", "agent", "bot", "talk to ai", "commands"],
+      "keywords": ["help", "support", "what can you do", "hello", "hi", "hey", "good morning", "start", "guide"],
       "action": null,
       "answer": "👋 Karibu Unasemeje Support!\nI'm your AI Assistant. I can help you with:\n\n• 🚀 How to place an order\n• 💰 Adding funds & checking balance\n• 📦 Tracking your orders\n• 🎁 Referral bonuses\n• 🛠️ Troubleshooting issues\n\nJust type your question below, or use the Quick Actions on the left!"
     },
     {
       "id": "browse_services",
       "topic": "Browse Services & Prices",
-      "keywords": ["services", "what do you sell", "menu", "tiktok", "instagram", "youtube", "followers", "views", "likes", "prices", "list", "available", "catalog", "how much for", "service", "subscribers", "retweets", "shares", "comments", "rates", "cost of", "packages", "products", "offers"],
+      "keywords": ["services", "what do you sell", "menu", "tiktok", "instagram", "youtube", "followers", "views", "likes", "prices", "list", "available", "catalog", "how much for", "service"],
       "action": "fetch_services",
       "answer": "🛒 We offer hundreds of premium, high-quality services across all major social platforms!\n\nI can pull up some live examples for you right now. Here is what's trending:"
     },
     {
       "id": "place_order",
       "topic": "Placing an Order",
-      "keywords": ["order", "buy", "boost", "get followers", "get likes", "how to order", "place order", "new order", "nimebuy", "how to boost", "purchase", "shopping", "how to buy", "add order", "submit order", "create order", "start boost", "tengeneza order"],
+      "keywords": ["order", "buy", "boost", "get followers", "get likes", "how to order", "place order", "new order", "nimebuy", "how to boost", "purchase"],
       "action": null,
       "answer": "🚀 Placing an order is super easy!\n1️⃣ Go to New Order.\n2️⃣ Pick your Category (IG, TikTok, etc.).\n3️⃣ Select the Service you want.\n4️⃣ Paste your Profile or Post Link.\n5️⃣ Enter Quantity and hit CONFIRM BOOST!\n\n💡 Pro Tip: Make sure your account is PUBLIC before ordering followers or views!"
     },
     {
       "id": "add_funds",
       "topic": "Adding Funds & Payment Methods",
-      "keywords": ["add funds", "deposit", "money", "wallet", "top up", "pay", "checkout", "fund account", "mpesa", "payment method", "how to pay", "paybill", "till number", "mjengo", "weka pesa", "tuma pesa", "lipa", "kuongeza pesa", "stk push", "billing", "recharge"],
+      "keywords": ["add funds", "deposit", "money", "wallet", "top up", "pay", "checkout", "fund account", "mpesa", "payment method", "how to pay", "paybill", "till number", "mjengo"],
       "action": null,
       "answer": "💰 To add funds to your wallet:\n1️⃣ Go to the Add Funds page.\n2️⃣ Ensure your M-Pesa Payment Nodes are saved in your profile!\n3️⃣ Enter the amount in the Paynecta checkout portal.\n4️⃣ Complete the M-Pesa prompt.\n\n⚡ Deposits are auto-verified instantly! We accept M-Pesa and other mobile money methods via the secure Paynecta portal."
     },
     {
       "id": "check_balance",
       "topic": "Account Balance",
-      "keywords": ["balance", "how much", "wallet balance", "check balance", "account balance", "pesa", "nina pesa", "salio", "amount left", "my money", "remaining cash", "wallet statement", "pesa ngapi"],
+      "keywords": ["balance", "how much", "wallet balance", "check balance", "account balance", "pesa", "nina pesa"],
       "action": "fetch_balance",
       "answer": "💰 Your current wallet balance is KES {balance}.\n\nGot some loose change? Top up via the Add Funds page and keep the aura boosting! 🚀"
     },
     {
       "id": "check_orders",
       "topic": "Checking Orders",
-      "keywords": ["my orders", "order status", "pending", "active orders", "track order", "progress", "history", "order history", "delivered", "completed orders", "angalia order", "zangu", "tracking ID", "where is my order"],
+      "keywords": ["my orders", "order status", "pending", "active orders", "track order", "progress"],
       "action": "fetch_orders",
       "answer": "📦 You currently have {active_orders} active order(s) processing!\n\nMost orders start within 0-5 minutes. You can track their live status on the My Orders page. If one gets stuck, our system auto-refunds or retries automatically!"
     },
     {
       "id": "payment_not_credited",
       "topic": "Payment Not Credited",
-      "keywords": ["money not received", "payment failed", "not credited", "where is my money", "stuck", "pending", "delayed", "sent but not received", "mpesa not reflecting", "missing money", "account not credited", "sijaona pesa", "nimetuma", "pesa haijaingia", "paynecta issue", "transaction failed"],
+      "keywords": ["money not received", "payment failed", "not credited", "where is my money", "stuck", "pending", "delayed", "sent but not received", "mpesa not reflecting", "missing money", "account not credited"],
       "action": "ask_for_payment_phone",
       "answer": "🚨 Did you send money but it is not in your wallet?\n\nPlease send me the exact phone number you used to send the money (for example: 0712345678).\n\nI will check our system to see if the payment is there and add it to your account immediately! 🛠️"
     },
     {
+      "id": "user_provided_phone_number",
+      "topic": "User Provided Phone Number for Payment Check",
+      "keywords": ["07", "01", "+254", "2547", "2541", "070", "071", "072", "073", "074", "075", "076", "077", "078", "079", "010", "011"],
+      "action": "check_and_credit_payment",
+      "answer": "PROCESSING_PAYMENT_CONTEXT"
+    },
+    {
       "id": "change_password",
       "topic": "Changing Password",
-      "keywords": ["password", "change password", "reset password", "forgot password", "security", "login issue", "bad credentials", "update password", "protect account", "funguo", "badilisha password"],
+      "keywords": ["password", "change password", "reset password", "forgot password", "security", "login issue"],
       "action": null,
       "answer": "🔒 To change your password:\nScroll down on the Add Funds or Dashboard page to the 'Modify Security Gateway' section. Enter your current password and set a new one. Stay secure, boss! 🛡️"
     },
     {
       "id": "update_phone",
       "topic": "Updating Phone Numbers",
-      "keywords": ["change phone", "update phone", "payment nodes", "funding numbers", "add phone", "payment channels", "namba ya simu", "badilisha namba", "mpesa number", "alternative number"],
+      "keywords": ["change phone", "update phone", "payment nodes", "funding numbers", "add phone", "payment channels"],
       "action": null,
       "answer": "📱 To update your M-Pesa numbers:\nGo to Add Funds -> 'Modify Account Profile'. You can add up to 2 Alternative Funding Nodes. \n\n⚠️ IMPORTANT: You MUST click 'Save Profile Changes' BEFORE making a deposit, or the system won't recognize your payment!"
     },
     {
       "id": "pricing_rates",
       "topic": "Pricing & Rates",
-      "keywords": ["price", "cost", "rate", "expensive", "cheap", "per 1k", "pricing", "charge", "fee", "how much per 1000", "bei ni gani", "bei ya", "ghali"],
+      "keywords": ["price", "cost", "rate", "expensive", "cheap", "per 1k", "pricing"],
       "action": null,
       "answer": "💵 Our Pricing:\nAll services are priced per 1,000 (1k). \n\nFor example, if a service says KES 50/1k, and you order 2,000 followers, it will cost you KES 100!\n\n💡 Check the 'Services' page to see the exact rate for every platform!"
     },
     {
       "id": "referral_bonus",
       "topic": "Referral Bonus",
-      "keywords": ["refer", "referral", "bonus", "commission", "earn", "invite", "friends", "10%", "affiliate", "link ya kualika", "pata pesa", "free balance", "share link"],
+      "keywords": ["refer", "referral", "bonus", "commission", "earn", "invite", "friends", "10%"],
       "action": null,
       "answer": "🎁 The Unasemeje Referral Plug!\nShare your unique referral code with your squad. Every time they buy a service, YOU get a 10% commission in your wallet!\n\n💸 Passive income kwa mtandao! Check your code on the Referrals page."
     },
     {
       "id": "custom_comments",
       "topic": "Custom Comments",
-      "keywords": ["comments", "custom comments", "write comments", "comment service", "maneno yangu", "type comments", "own comments", "personalized comments"],
+      "keywords": ["comments", "custom comments", "write comments", "comment service"],
       "action": null,
       "answer": "💬 Ordering Custom Comments:\n1️⃣ Select a 'Custom Comments' service in New Order.\n2️⃣ A text box will appear instead of the quantity box.\n3️⃣ Type your comments (one per line).\n4️⃣ The system automatically counts them and calculates the price!\n\n🔥 You are the director!"
     },
     {
       "id": "order_stuck",
       "topic": "Order Stuck / Delayed",
-      "keywords": ["stuck", "not starting", "waiting", "haraka", "pole", "slow", "delay", "not processing", "takes long", "order haijaanza", "imekwama", "bado", "not counting"],
+      "keywords": ["stuck", "not starting", "waiting", "haraka", "pole", "slow"],
       "action": null,
       "answer": "⏳ Order stuck on 'Pending'?\nDon't panic! Sometimes the provider's server is updating. \n\n1️⃣ Wait 15-30 minutes.\n2️⃣ If it still hasn't started, go to My Orders and click 'Sync Status'.\n3️⃣ If it failed, the money is auto-refunded to your wallet! ✅"
     },
     {
       "id": "link_requirements",
       "topic": "Link Requirements",
-      "keywords": ["link", "url", "profile", "post", "public", "private", "wrong link", "how to copy link", "tuma link", "picha link", "video link"],
+      "keywords": ["link", "url", "profile", "post", "public", "private", "wrong link"],
       "action": null,
       "answer": "🔗 Link Rules (Very Important!):\n• Followers/Profile Views: Paste your PROFILE link (e.g., instagram.com/username).\n• Likes/Views/Comments: Paste the specific POST link.\n• ⚠️ Your profile MUST be PUBLIC! Private accounts cannot receive followers or views, and the order will fail."
     },
     {
       "id": "cancel_order",
       "topic": "Cancel Order / Refund",
-      "keywords": ["cancel", "cancel order", "refund", "get money back", "undo", "rudisha pesa", "sitaki tena", "stop order", "reverse"],
+      "keywords": ["cancel", "cancel order", "refund", "get money back", "undo"],
       "action": null,
       "answer": "❌ Can I cancel an order?\nOnce an order is placed, it's sent to the provider instantly and cannot be cancelled.\n\nHowever, if the order fails or remains incomplete, the system will automatically refund the money back to your wallet! 💸"
     },
     {
       "id": "guarantee_safety",
       "topic": "Safety & Guarantee",
-      "keywords": ["safe", "ban", "banned", "hack", "legit", "trust", "scam", "secure", "real accounts", "drop", "refill", "unblock", "risk", "kupigwa ban"],
+      "keywords": ["safe", "ban", "banned", "hack", "legit", "trust"],
       "action": null,
       "answer": "🛡️ Is it safe? Will I get banned?\n100% Safe! We use premium, high-retention methods that mimic organic growth. \n\n• No passwords required (Never share your password!).\n• Safe for all accounts.\n• If an order drops, many of our premium services come with a 30-day refill guarantee! 🔄"
     },
     {
-      "id": "small_talk",
-      "topic": "Greetings and Simple Replies",
-      "keywords": ["okay", "ok", "good", "nice", "thanks", "thank you", "good morning", "good afternoon", "good evening", "good night", "hello", "hi", "hey", "sawa", "poa", "asante", "karibu", "bye", "goodbye", "cool", "perfect", "awesome", "thx", "ty", "shukran", "ndio", "it's working", "understood"],
+      "id": "initial_greeting",
+      "topic": "Initial Greetings",
+      "keywords": ["hello", "hi", "hey", "good morning", "good afternoon", "good evening", "start", "karibu"],
       "action": null,
-      "answer": "😊 Always glad to help! Let me know if there's anything else you need assistance with."
+      "answer": "👋 Hello! I am your Unasemeje AI Assistant. I can help you with deposits, orders, services, balance checks, and account support. How can I help you today?"
+    },
+    {
+      "id": "closing_and_thanks",
+      "topic": "Closings and Thanks",
+      "keywords": ["thanks", "thank you", "asante", "bye", "goodbye", "good night", "okay", "ok", "alright", "cool", "nice", "good"],
+      "action": null,
+      "answer": "😊 You're welcome! Have a great day."
     },
     {
       "id": "unregistered_payment_check",
       "topic": "Check Deposit From Unregistered Number",
-      "keywords": ["i deposited with another number", "used different number", "wrong number", "unregistered number", "deposit not reflected", "sent money", "used another number", "different phone number", "namba ingine", "simu nyingine"],
+      "keywords": ["i deposited with another number", "used different number", "wrong number", "unregistered number", "deposit not reflected", "sent money", "used another number", "different phone number"],
       "action": "ask_for_payment_phone",
       "answer": "📲 It looks like you sent money from a different number.\n\nPlease send me the exact phone number you used to make the payment.\n\nI will check if a completed payment exists and add it to your wallet immediately! ✅"
     },
     {
       "id": "register_phone",
       "topic": "Register New Funding Number",
-      "keywords": ["register number", "add number", "save phone number", "new payment number", "funding number", "save number", "new funding number", "register phone", "weka namba"],
+      "keywords": ["register number", "add number", "save phone number", "new payment number", "funding number", "save number", "new funding number", "register phone"],
       "action": "save_phone_number",
       "answer": "📱 Please send the phone number you would like to register.\n\nOnce verified, I will save it to your account for future deposits."
     },
     {
       "id": "change_profile",
       "topic": "Profile Updates",
-      "keywords": ["change name", "change username", "edit profile", "update profile", "change details", "modify account", "update my name", "change my details", "change names", "badilisha jina", "badili email"],
+      "keywords": ["change name", "change username", "edit profile", "update profile", "change details", "modify account", "update my name", "change my details", "change names", "change email", "change account number"],
       "action": "update_profile",
-      "answer": "👤 I can help update your account details.\n\nPlease tell me what you want to change (name, username, email, or phone number) and I will save the changes for you."
+      "answer": "👤 I can help update some of your account details!\n\n✅ WHAT I CAN UPDATE:\n• Your Display Name\n• Your Extra Funding Phone Numbers\n\n❌ WHAT I CANNOT UPDATE:\n• Your Account Number / Username (This is permanent)\n• Your Email Address (This is permanent)\n\nPlease tell me what you want to change (Name or Extra Phone Number) and I will save it for you. If you need to change your Email or Username, please contact WhatsApp Support directly!"
     },
     {
       "id": "cheap_services",
       "topic": "Cheap Services",
-      "keywords": ["cheap facebook likes", "cheap followers", "cheap services", "facebook likes", "facebook followers", "instagram likes", "tiktok followers", "cheap", "below 100", "under 100", "budget", "low price", "cheap views", "bei rahisi", "chini ya 100"],
+      "keywords": ["cheap facebook likes", "cheap followers", "cheap services", "facebook likes", "facebook followers", "instagram likes", "tiktok followers", "cheap", "below 100", "under 100", "budget", "low price"],
       "action": "fetch_cheap_services",
       "answer": "🔥 Here are some affordable services under KES 100 currently available:\n\n🔹 Facebook Followers: KES 45 for 1,000\n🔹 Facebook Page Likes: KES 60 for 1,000\n🔹 Instagram Likes: KES 30 for 1,000\n🔹 TikTok Followers: KES 85 for 1,000\n🔹 YouTube Views: KES 90 for 1,000\n\n🚀 Go to New Order and choose these services to save money!"
+    },
+    {
+      "id": "api_access",
+      "topic": "API Access & Documentation",
+      "keywords": ["api", "api key", "api documentation", "integration", "developer", "connect"],
+      "action": null,
+      "answer": "🔌 Need API access? We provide a full REST API for automated ordering!\n\n1️⃣ Go to your Dashboard.\n2️⃣ Click on 'API' in the menu.\n3️⃣ Generate your unique API Key.\n4️⃣ Check the 'API Documentation' page for endpoints, parameters, and examples.\n\n💡 Pro Tip: Keep your API key secret and never share it publicly!"
+    },
+    {
+      "id": "order_drops_refill",
+      "topic": "Order Drops & Refills",
+      "keywords": ["drop", "dropped", "refill", "decreasing", "losing followers", "lost likes", "refill guarantee"],
+      "action": null,
+      "answer": "📉 Did your numbers drop? Don't worry!\n\nMany of our premium services come with a 30-day (or even 60-day) Refill Guarantee.\n\n1️⃣ Go to 'My Orders'.\n2️⃣ Find the order that dropped.\n3️⃣ Click the 'Refill' button (if available).\n4️⃣ The system will automatically top up the lost numbers within 24 hours!\n\n⚠️ Note: If your account was private or you deleted the post, the refill will fail."
+    },
+    {
+      "id": "speed_delivery",
+      "topic": "Delivery Speed & Drip-feed",
+      "keywords": ["slow", "speed", "delivery time", "drip feed", "instant", "taking too long", "why so slow"],
+      "action": null,
+      "answer": "⏱️ Delivery speeds vary by service:\n\n• ⚡ Instant Services: Start immediately and deliver as fast as the platform allows.\n• 🐢 Safe/Slow Services: Deliver gradually over hours or days to look 100% natural and avoid platform bans.\n• 💧 Drip-feed: You can set a custom speed (e.g., 100 likes every 1 hour).\n\nIf an order hasn't started after 1 hour, please contact support!"
+    },
+    {
+      "id": "targeted_services",
+      "topic": "Targeted & Country-Specific Services",
+      "keywords": ["targeted", "country", "location", "usa followers", "kenyan followers", "real people", "specific country"],
+      "action": null,
+      "answer": "🌍 Want followers from a specific country?\n\nWe offer targeted services! When placing an order, look for services labeled with country flags (e.g., 🇺🇸 USA, 🇬🇧 UK, 🇰🇪 Kenya).\n\n💡 Note: Targeted services are highly premium and may cost slightly more, but they guarantee real engagement from your desired region!"
+    },
+    {
+      "id": "login_issues",
+      "topic": "Login & Account Access Issues",
+      "keywords": ["cannot login", "login failed", "wrong password", "account locked", "2fa", "two factor", "forgot login"],
+      "action": null,
+      "answer": "🔒 Having trouble logging in?\n\n1️⃣ Make sure you are using the correct email and password.\n2️⃣ If you forgot your password, click 'Forgot Password' on the login page to reset it via email.\n3️⃣ If you have 2FA enabled and lost your phone, contact WhatsApp Support immediately with your account details for manual verification.\n\n⚠️ NEVER share your password with anyone, including our support team!"
+    },
+    {
+      "id": "payment_receipt",
+      "topic": "Payment Receipt / M-Pesa Message",
+      "keywords": ["receipt", "mpesa message", "confirmation message", "transaction id", "proof of payment"],
+      "action": null,
+      "answer": "🧾 Need to send proof of payment?\n\nIf your funds are stuck, we need the exact M-Pesa Confirmation Message.\n\nPlease send a screenshot or copy the full text of the M-Pesa message that includes:\n• Transaction ID (e.g., QFG3H89XCV)\n• Amount\n• Phone Number\n• Date and Time\n\nSend this to our WhatsApp Support for instant manual verification!"
     }
   ],
   "actions": {
@@ -173,30 +229,35 @@
       "description": "Save funding number to user profile"
     },
     "update_profile": {
-      "description": "Update user profile information"
+      "description": "Update user profile information. STRICTLY limited to Display Name and Extra Funding Phone Numbers. NEVER updates Account Number/Username or Email."
     }
   },
   "ai_rules": [
+    "CRITICAL CONTEXT RULE FOR PAYMENTS: If your previous message asked the user for a phone number (because of a payment issue), and their next message is a phone number (e.g., 0712345678, +254...), you MUST NOT treat it as an unknown query. You must immediately trigger the `check_and_credit_payment` action with that number.",
+    "If the `check_and_credit_payment` action finds a payment, reply EXACTLY: '✅ Great news! I found your payment from that number and have added the money to your wallet immediately.'",
+    "If the `check_and_credit_payment` action does NOT find a payment, reply EXACTLY: '❌ Sorry, we cannot find any completed payment from that number in our system. Please contact WhatsApp Support with your M-Pesa message for help.'",
+    "CONVERSATION ENDING & NO REPETITION: If the user says 'thanks', 'thank you', 'okay', 'ok', 'bye', or indicates they are satisfied, reply with a brief, polite closing (e.g., '😊 You are welcome!', '👍 Great!'). DO NOT ask 'How can I help you today?', 'What else do you need?', or 'Is there anything else?' if the user is clearly ending the conversation. Let the conversation end naturally without forcing further interaction.",
+    "EXTENSIVE KNOWLEDGE & ADAPTABILITY (500+ QUESTIONS): You are an expert AI for an SMM (Social Media Marketing) panel. While this JSON contains specific triggers, you must use your advanced language capabilities to accurately answer ANY question related to social media marketing, panel usage, troubleshooting, API, drops, refills, and platform-specific algorithms. Use the `knowledge_base` as your core truth, but expand on it logically to handle hundreds of variations, edge cases, and complex follow-up questions without needing a specific JSON entry for every single one. Always provide accurate, step-by-step solutions.",
+    "CONVERSATIONAL MEMORY: Always maintain the conversational context. Remember what you and the user just talked about. If the user asks a follow-up question, answer it based on the previous context. Do not reset the conversation unless the user explicitly starts a completely new topic.",
+    "STRICT PROFILE UPDATE LIMITS: You are NOT allowed to update a user's Account Number (Username) or Email Address. If a user asks to change their username or email, you must politely inform them that these are permanent account identifiers and can only be changed by contacting the Admin via WhatsApp Support. You are ONLY allowed to update their Display Name and Extra Funding Phone Numbers.",
     "When user says hello, reply: 'Hello 👋 How can I help you today?'",
     "When user says hi, reply: 'Hi 👋 Welcome to Unasemeje.'",
     "When user says good morning, reply: '🌞 Good morning! How can I assist you today?'",
     "When user says good afternoon, reply: '☀️ Good afternoon! How can I help?'",
     "When user says good evening, reply: '🌙 Good evening! Need any assistance?'",
     "When user says good night, reply: '🌙 Good night and thank you for using Unasemeje.'",
-    "When user says thanks, thank you, okay, ok, sawa, or poa AFTER an answer has already been successfully delivered, use the closing acknowledgment statement: '😊 Always glad to help! Let me know if there's anything else you need assistance with.' Do NOT show the full welcoming help options banner or ask them to start over.",
-    "When user says bye or goodbye, reply: '👋 Goodbye and have a great day!'",
+    "When user says thanks or thank you, reply: '😊 You are welcome!' (Do not ask follow-up questions).",
+    "When user says okay or ok, reply: '👍 Great!' (Do not ask follow-up questions).",
+    "When user says bye or goodbye, reply: '👋 Goodbye and have a great day!' (Do not ask follow-up questions).",
     "When user asks for Facebook services, show Facebook services costing less than KES 100 first.",
     "When user asks for Instagram services, show Instagram services costing less than KES 100 first.",
     "When user asks for TikTok services, show TikTok services costing less than KES 100 first.",
-    "When user says their payment was not credited or they used another number, ask for the phone number used using the 'ask_for_payment_phone' action workflow.",
-    "CRITICAL CONTEXT RULE: If the previous AI message was an instruction asking for a payment phone number (e.g., 'Please send me the exact phone number you used to send the money'), and the user's input contains a phone number starting with 07, 01, 254, or +, immediately trigger the 'check_and_credit_payment' database action using that raw phone number structure.",
-    "If a completed payment is found from that checked number but not yet credited, execute the account wallet update directly and reply: '✅ Great news! I found your payment from that number and have added the money to your wallet immediately.'",
-    "If no completed payment is found from that checked number, reply: '❌ Sorry, we cannot find any completed payment from that number in our system. Please contact WhatsApp Support with your M-Pesa message for help.'",
-    "Allow users to register funding numbers.",
-    "Allow users to update names, usernames, emails and funding numbers.",
+    "When user says their payment was not credited or they used another number, ask for the phone number used.",
+    "Allow users to register extra funding numbers.",
+    "Allow users to update their Display Name and Extra Funding Phone Numbers. NEVER update Account Numbers (Usernames) or Email Addresses.",
     "Maintain a smooth, natural, and friendly conversation flow. Always connect your answers to what the user just said and remember what you talked about previously.",
     "Always use simple English.",
     "Never expose database information.",
     "Always be polite and helpful."
   ]
-}
+    }
