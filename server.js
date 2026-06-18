@@ -1099,7 +1099,7 @@ app.put("/api/admin/ticker/speed", async (req, res) => {
 
 /**
  * =========================================
- * INTERNAL AI SUPPORT BOT
+ * INTERNAL AI SUPPORT BOT (CONTEXT-AWARE & ASYNC)
  * =========================================
  */
 let knowledgeBase = { knowledge_base: [] };
@@ -1110,8 +1110,120 @@ try {
     console.warn("⚠️ knowledge_base.json not found in root directory. Internal AI will use fallback responses.");
 }
 
-function processInternalAI(message, context = {}) {
+// 🧠 NEW: ASYNC AI ENGINE WITH CONTEXT-AWARE PHONE HANDLING
+async function processInternalAI(message, context = {}) {
     const cleanMessage = message.toLowerCase().replace(/[^\w\s]/gi, '').trim();
+    const rawMessage = message.trim();
+    const recentLogs = context.recentLogs || [];
+
+    // 🚨 CONTEXT-AWARE HANDLING (Topic Locking & Progressive Problem Solving)
+    if (context.userId && recentLogs.length > 0) {
+        const lastLog = recentLogs[0]; // The most recent log is the previous turn
+        const lastAiReply = lastLog.aiReply.toLowerCase();
+        
+        const phoneRegex = /^(07|01|\+254|2547|2541)\d{8,9}$/;
+        const isPhoneNumber = phoneRegex.test(rawMessage.replace(/\s/g, ''));
+
+        // SCENARIO 1: PAYMENT CHECK (User sent a phone number after a payment issue prompt)
+        if (isPhoneNumber && (lastAiReply.includes("payment") || lastAiReply.includes("wallet") || lastAiReply.includes("credited") || lastAiReply.includes("check our system") || lastAiReply.includes("money") || lastAiReply.includes("send me the exact phone"))) {
+            try {
+                const cleanPhone = rawMessage.replace(/\s/g, '');
+                
+                // 🚨 Fetch user's registered phones to verify
+                const currentUser = await User.findById(context.userId);
+                const registeredPhones = [
+                    currentUser.phone,
+                    currentUser.paymentPhone1,
+                    currentUser.paymentPhone2,
+                    currentUser.paymentPhone3
+                ].filter(Boolean);
+                
+                const isRegistered = registeredPhones.includes(cleanPhone);
+                
+                // Check Deposit model for uncredited (pending) payment
+                const uncreditedPayment = await Deposit.findOne({ phone: cleanPhone, status: 'pending' }).sort({ createdAt: -1 });
+                
+                if (uncreditedPayment) {
+                    if (isRegistered) {
+                        // Auto-approve and credit the wallet instantly!
+                        const user = await User.findById(context.userId);
+                        user.balance += uncreditedPayment.amount;
+                        uncreditedPayment.status = 'completed';
+                        await user.save();
+                        await uncreditedPayment.save();
+                        return `✅ Great news! I found your pending payment from ${cleanPhone} (which is registered in your funding numbers) and have added the money to your wallet immediately.`;
+                    } else {
+                        return `⚠️ I found a pending payment from ${cleanPhone}, but this number is NOT saved in your profile or payment nodes. Please add it to your payment nodes first, then ask me to check the payment again!`;
+                    }
+                } else {
+                    // Check if it's already completed
+                    const anyPayment = await Deposit.findOne({ phone: cleanPhone }).sort({ createdAt: -1 });
+                    if (anyPayment && anyPayment.status === 'completed') {
+                         return `ℹ️ I see a payment from ${cleanPhone}, but it has already been credited to your wallet.`;
+                    }
+                    return `❌ Sorry, we cannot find any pending or uncredited payment from ${cleanPhone} in our system. Please contact WhatsApp Support with your M-Pesa message.`;
+                }
+            } catch (err) {
+                console.error("Payment check error:", err);
+                return "❌ An error occurred while checking your payment. Please contact WhatsApp Support.";
+            }
+        } 
+        
+        // SCENARIO 2: PROFILE UPDATE - PHONE (User sent a phone number after a profile update prompt)
+        else if (isPhoneNumber && (lastAiReply.includes("profile") || lastAiReply.includes("update") || lastAiReply.includes("register") || lastAiReply.includes("funding number") || lastAiReply.includes("save it to your profile") || lastAiReply.includes("what you want to change"))) {
+            try {
+                const cleanPhone = rawMessage.replace(/\s/g, '');
+                
+                // 🚨 Fetch existing phones to check for duplicates and limits
+                const currentUser = await User.findById(context.userId);
+                const existingPhones = [
+                    currentUser.phone,
+                    currentUser.paymentPhone1,
+                    currentUser.paymentPhone2,
+                    currentUser.paymentPhone3
+                ].filter(Boolean);
+                
+                if (existingPhones.includes(cleanPhone)) {
+                    return `ℹ️ The number ${cleanPhone} is already saved in your profile! No need to update it.`;
+                }
+                
+                // Find the first empty payment phone slot
+                let updatePayload = {};
+                if (!currentUser.paymentPhone1) {
+                    updatePayload.paymentPhone1 = cleanPhone;
+                } else if (!currentUser.paymentPhone2) {
+                    updatePayload.paymentPhone2 = cleanPhone;
+                } else if (!currentUser.paymentPhone3) {
+                    updatePayload.paymentPhone3 = cleanPhone;
+                } else {
+                    return `⚠️ You have reached the maximum limit of 3 payment phone numbers. You cannot add more. Please contact support if you need to change them.`;
+                }
+                
+                await User.findByIdAndUpdate(context.userId, { $set: updatePayload });
+                return `✅ Success! Your profile has been updated. The new funding number ${cleanPhone} has been saved to your account for future deposits.`;
+            } catch (err) {
+                console.error("Profile update error:", err);
+                return "❌ An error occurred while updating your profile. Please try again or contact support.";
+            }
+        }
+
+        // SCENARIO 3: PROFILE UPDATE - NAME (User sent a name after a profile update prompt)
+        else if (!isPhoneNumber && (lastAiReply.includes("what you want to change") || lastAiReply.includes("update some of your account details"))) {
+            try {
+                const newName = rawMessage;
+                // Update the display name fields
+                await User.findByIdAndUpdate(context.userId, { $set: { firstName: newName, paymentProfileName: newName } }); 
+                return `✅ Success! Your display name has been updated to "${newName}".`;
+            } catch (err) {
+                console.error("Name update error:", err);
+                return "❌ An error occurred while updating your name. Please try again.";
+            }
+        }
+    }
+
+    // ==========================================
+    // STANDARD FUZZY MATCHING (If no specific context action was triggered)
+    // ==========================================
     let bestMatch = null;
     let highestScore = 0;
 
@@ -1157,7 +1269,7 @@ function processInternalAI(message, context = {}) {
         return finalAnswer;
     }
     
-    return "🤔 Hmm, I'm not entirely sure about that one! You can ask me about:\n• 💰 Adding funds or checking your balance\n• 🚀 How to place an order\n• 📦 Tracking your active orders\n• 🎁 Referral bonuses\n\nOr click 'Human Support' to message the Admin directly!";
+    return "🤔 I might need a bit more detail to give you the perfect answer! As your Unasemeje AI expert, I can help you with:\n\n• 💰 Deposits, M-Pesa issues, and wallet balance\n• 🚀 Placing orders, API access, and service pricing\n• 📦 Tracking orders, refills, and delivery speeds\n• 👤 Updating your profile and funding numbers\n\nCould you rephrase your question, or click 'Human Support' to message the Admin directly?";
 }
 
 app.post("/api/support-bot", auth, async (req, res) => {
@@ -1188,7 +1300,19 @@ app.post("/api/support-bot", auth, async (req, res) => {
         }
     } catch (err) { console.warn("AI Context Error."); }
 
-    let aiReply = processInternalAI(userMessage, { balance: userBalance, activeOrders });
+    // 🧠 Fetch recent chat history for context awareness (Topic Locking & Phone Scenarios)
+    let recentLogs = [];
+    try {
+        recentLogs = await ChatLog.find({ userId }).sort({ createdAt: -1 }).limit(5);
+    } catch (err) { console.warn("Could not fetch recent chat logs."); }
+
+    // 🧠 Process AI with context (NOW ASYNC to handle DB actions)
+    let aiReply = await processInternalAI(userMessage, { 
+        balance: userBalance, 
+        activeOrders, 
+        userId, 
+        recentLogs 
+    });
     
     const cleanMsg = userMessage.toLowerCase();
     const serviceKeywords = ["service", "services", "menu", "tiktok", "instagram", "youtube", "facebook", "twitter", "telegram", "followers", "views", "likes", "subscribers", "price", "prices", "cost", "catalog", "sell"];
