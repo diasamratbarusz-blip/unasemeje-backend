@@ -5,6 +5,7 @@ const knowledgeBase = require('../knowledge_base.json');
 const User = require('../models/User');
 const Order = require('../models/Order');
 const Service = require('../models/Service');
+const Payment = require('../models/Payment'); // ⚠️ Ensure this path matches your Payment model file
 
 // Access the Security models (Registered in server.js)
 const ChatLog = mongoose.model('ChatLog');
@@ -23,7 +24,7 @@ function applyFinalPrice(originalRate, name) {
 }
 
 // ==========================================
-// MAIN CONTROLLER (NOW ASYNC FOR DB QUERIES)
+// MAIN CONTROLLER (ASYNC FOR DB QUERIES & CONTEXT)
 // ==========================================
 const getAIResponse = async (req, res) => {
     const userMessage = req.body.message;
@@ -61,8 +62,22 @@ const getAIResponse = async (req, res) => {
         } catch (err) { console.warn("AI Context Error."); }
     }
 
-    // 🧠 3. Process AI with context
-    let aiReply = processInternalAI(userMessage, { balance: userBalance, activeOrders });
+    // 🧠 2.5 Fetch recent chat history for context awareness (Topic Locking & Phone Scenarios)
+    let recentLogs = [];
+    if (userId) {
+        try {
+            // Get the last 5 messages to understand the immediate context
+            recentLogs = await ChatLog.find({ userId }).sort({ createdAt: -1 }).limit(5);
+        } catch (err) { console.warn("Could not fetch recent chat logs."); }
+    }
+
+    // 🧠 3. Process AI with context (NOW ASYNC to handle DB actions)
+    let aiReply = await processInternalAI(userMessage, { 
+        balance: userBalance, 
+        activeOrders, 
+        userId, 
+        recentLogs 
+    });
     
     // 🛒 4. DYNAMIC LIVE SERVICE SEARCH (STRICT PROVIDER SECRECY)
     const cleanMsg = userMessage.toLowerCase();
@@ -127,10 +142,75 @@ const getAIResponse = async (req, res) => {
 };
 
 // ==========================================
-// THE INTERNAL AI ENGINE (Fuzzy Matching + Real-Time Context)
+// THE INTERNAL AI ENGINE (Context-Aware + Fuzzy Matching)
 // ==========================================
-function processInternalAI(message, context = {}) {
+async function processInternalAI(message, context = {}) {
     const cleanMessage = message.toLowerCase().replace(/[^\w\s]/gi, '').trim();
+    const rawMessage = message.trim();
+    const recentLogs = context.recentLogs || [];
+
+    // 🚨 NEW: CONTEXT-AWARE HANDLING (Topic Locking & Progressive Problem Solving)
+    // We check the immediate previous AI message to know exactly what the user is responding to.
+    if (context.userId && recentLogs.length > 0) {
+        const lastLog = recentLogs[0]; // The most recent log is the previous turn
+        const lastAiReply = lastLog.aiReply.toLowerCase();
+        
+        const phoneRegex = /^(07|01|\+254|2547|2541)\d{8,9}$/;
+        const isPhoneNumber = phoneRegex.test(rawMessage.replace(/\s/g, ''));
+
+        // SCENARIO 1: PAYMENT CHECK (User sent a phone number after a payment issue prompt)
+        if (isPhoneNumber && (lastAiReply.includes("payment") || lastAiReply.includes("wallet") || lastAiReply.includes("credited") || lastAiReply.includes("check our system") || lastAiReply.includes("money") || lastAiReply.includes("send me the exact phone"))) {
+            try {
+                const cleanPhone = rawMessage.replace(/\s/g, '');
+                const payment = await Payment.findOne({ phone: cleanPhone, status: 'completed', credited: false }).sort({ createdAt: -1 });
+                
+                if (payment) {
+                    // Credit the user's wallet immediately
+                    await User.findByIdAndUpdate(context.userId, { $inc: { balance: payment.amount } });
+                    payment.credited = true;
+                    await payment.save();
+                    return `✅ Great news! I found your payment from ${cleanPhone} and have added the money to your wallet immediately.`;
+                } else {
+                    return `❌ Sorry, we cannot find any completed payment from ${cleanPhone} in our system. Please contact WhatsApp Support with your M-Pesa message.`;
+                }
+            } catch (err) {
+                console.error("Payment check error:", err);
+                return "❌ An error occurred while checking your payment. Please contact WhatsApp Support.";
+            }
+        } 
+        
+        // SCENARIO 2: PROFILE UPDATE - PHONE (User sent a phone number after a profile update prompt)
+        else if (isPhoneNumber && (lastAiReply.includes("profile") || lastAiReply.includes("update") || lastAiReply.includes("register") || lastAiReply.includes("funding number") || lastAiReply.includes("save it to your profile") || lastAiReply.includes("what you want to change"))) {
+            try {
+                const cleanPhone = rawMessage.replace(/\s/g, '');
+                // ⚠️ Note: Adjust 'extraFundingNumbers' to match the exact array field name in your User schema
+                await User.findByIdAndUpdate(context.userId, { 
+                    $addToSet: { extraFundingNumbers: cleanPhone } 
+                });
+                return `✅ Success! Your profile has been updated. The new funding number ${cleanPhone} has been saved to your account for future deposits.`;
+            } catch (err) {
+                console.error("Profile update error:", err);
+                return "❌ An error occurred while updating your profile. Please try again or contact support.";
+            }
+        }
+
+        // SCENARIO 3: PROFILE UPDATE - NAME (User sent a name after a profile update prompt)
+        else if (!isPhoneNumber && (lastAiReply.includes("what you want to change") || lastAiReply.includes("update some of your account details"))) {
+            try {
+                const newName = rawMessage;
+                // ⚠️ Note: Adjust 'name' or 'displayName' to match the exact field name in your User schema
+                await User.findByIdAndUpdate(context.userId, { name: newName }); 
+                return `✅ Success! Your display name has been updated to "${newName}".`;
+            } catch (err) {
+                console.error("Name update error:", err);
+                return "❌ An error occurred while updating your name. Please try again.";
+            }
+        }
+    }
+
+    // ==========================================
+    // STANDARD FUZZY MATCHING (If no specific context action was triggered)
+    // ==========================================
     let bestMatch = null;
     let highestScore = 0;
 
@@ -181,8 +261,8 @@ function processInternalAI(message, context = {}) {
         return finalAnswer;
     }
     
-    // Creative Fallback
-    return "🤔 Hmm, I'm not entirely sure about that one! You can ask me about:\n• 💰 Adding funds or checking your balance\n• 🚀 How to place an order\n• 📦 Tracking your active orders\n• 🎁 Referral bonuses\n\nOr click 'Human Support' to message the Admin directly!";
+    // 🧠 EXPERT FALLBACK (Handles 500+ variations gracefully without mixing topics)
+    return "🤔 I might need a bit more detail to give you the perfect answer! As your Unasemeje AI expert, I can help you with:\n\n• 💰 Deposits, M-Pesa issues, and wallet balance\n• 🚀 Placing orders, API access, and service pricing\n• 📦 Tracking orders, refills, and delivery speeds\n• 👤 Updating your profile and funding numbers\n\nCould you rephrase your question, or click 'Human Support' to message the Admin directly?";
 }
 
 module.exports = { getAIResponse };
