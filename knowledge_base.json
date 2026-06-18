@@ -50,13 +50,6 @@
       "answer": "🚨 Did you send money but it is not in your wallet?\n\nPlease send me the exact phone number you used to send the money (for example: 0712345678).\n\nI will check our system to see if the payment is there and add it to your account immediately! 🛠️"
     },
     {
-      "id": "user_provided_phone_number",
-      "topic": "User Provided Phone Number",
-      "keywords": ["07", "01", "+254", "2547", "2541", "070", "071", "072", "073", "074", "075", "076", "077", "078", "079", "010", "011"],
-      "action": null,
-      "answer": "PROCESSING_PHONE_NUMBER_CONTEXT"
-    },
-    {
       "id": "change_password",
       "topic": "Changing Password",
       "keywords": ["password", "change password", "reset password", "forgot password", "security", "login issue"],
@@ -143,14 +136,14 @@
     {
       "id": "register_phone",
       "topic": "Register New Funding Number",
-      "keywords": ["register number", "add number", "save phone number", "new payment number", "funding number", "save number", "new funding number", "register phone"],
+      "keywords": ["register number", "add number", "save phone number", "new payment number", "funding number", "save number", "new funding number", "register phone", "add extra number"],
       "action": null,
       "answer": "📱 Please send the exact phone number you would like to register as your new funding number.\n\nOnce you send it, I will save it to your profile immediately!"
     },
     {
       "id": "change_profile",
       "topic": "Profile Updates",
-      "keywords": ["change name", "change username", "edit profile", "update profile", "change details", "modify account", "update my name", "change my details", "change names", "change email", "change account number", "add extra number", "update phone"],
+      "keywords": ["change name", "change username", "edit profile", "update profile", "change details", "modify account", "update my name", "change my details", "change names", "change email", "change account number", "update phone"],
       "action": null,
       "answer": "👤 I can help update some of your account details!\n\n✅ WHAT I CAN UPDATE:\n• Your Display Name\n• Your Extra Funding Phone Numbers\n\n❌ WHAT I CANNOT UPDATE:\n• Your Account Number / Username (This is permanent)\n• Your Email Address (This is permanent)\n\nPlease tell me what you want to change. If you want to add an extra phone number, please send the number now!"
     },
@@ -222,29 +215,28 @@
       "description": "Ask the user for the phone number used to make the payment"
     },
     "check_and_credit_payment": {
-      "description": "Check if a completed payment exists for the given phone number. If yes, credit the user's wallet immediately. If no, return not found.",
-      "query": "SELECT * FROM payments WHERE phone = ? AND status = 'completed' AND credited = false ORDER BY id DESC LIMIT 1"
+      "description": "SCENARIO 1 (PAYMENT ISSUE): Used when resolving a payment issue. Checks if a completed, uncredited payment exists for the given phone number. If yes, credits the wallet. If no, returns not found."
     },
     "save_phone_number": {
-      "description": "Save the provided funding number to the user's profile as an extra payment node."
+      "description": "SCENARIO 2 (PROFILE UPDATE): Used when updating profile. Saves the provided phone number to the user's profile as an extra funding node."
     },
     "update_profile": {
       "description": "Update user profile information. STRICTLY limited to Display Name and Extra Funding Phone Numbers. NEVER updates Account Number/Username or Email."
     }
   },
   "ai_rules": [
-    "TOPIC LOCKING & NO MIXING: You must identify the main topic of the current conversation (e.g., 'Payment Issue', 'Profile Update'). Once a topic is established, stay strictly focused on resolving that specific issue step-by-step until the user is satisfied or explicitly changes the subject. Do not mix topics. For example, if the user is resolving a 'payment not credited' issue, do not suddenly talk about profile updates. Keep the conversation progressive and focused on their current problem.",
+    "CRITICAL: CONTEXT-AWARE PHONE NUMBER HANDLING. When a user sends a phone number (e.g., 07..., 01..., +254...), you MUST look at your IMMEDIATE PREVIOUS MESSAGE to determine the user's intent. There are TWO STRICTLY SEPARATE SCENARIOS:",
     
-    "CONTEXT-AWARE PHONE NUMBER HANDLING: When a user sends a phone number (matching 07, 01, +254, etc.), you MUST look at the immediate previous context to decide the action:",
-    "SCENARIO A (Payment Issue): If the previous context was resolving a 'payment not credited' issue, you MUST trigger the `check_and_credit_payment` action. Search the system for that exact number. If found, credit it and reply: '✅ Great news! I found your payment from [number] and have added the money to your wallet immediately.' If NOT found, reply: '❌ Sorry, we cannot find any completed payment from [number] in our system. Please contact WhatsApp Support with your M-Pesa message.'",
-    "SCENARIO B (Profile Update): If the previous context was about updating the profile, changing details, or registering a new funding number, you MUST trigger the `save_phone_number` action. After processing, reply EXACTLY: '✅ Success! Your profile has been updated. The new funding number [number] has been saved to your account for future deposits.'",
+    "SCENARIO 1 (PAYMENT CHECK): If your previous message was asking for a phone number to fix a 'payment not credited' or 'missing money' issue, you MUST trigger the `check_and_credit_payment` action. Do NOT save this number to their profile. Search the system for that number. If found, reply: '✅ Great news! I found your payment from [number] and have added the money to your wallet immediately.' If NOT found, reply: '❌ Sorry, we cannot find any completed payment from [number] in our system. Please contact WhatsApp Support with your M-Pesa message.'",
+    
+    "SCENARIO 2 (PROFILE UPDATE): If your previous message was asking for a phone number to 'update profile', 'change details', or 'register a new funding number', you MUST trigger the `save_phone_number` action. Do NOT check for uncredited payments. After processing, reply EXACTLY: '✅ Success! Your profile has been updated. The new funding number [number] has been saved to your account for future deposits.'",
+    
+    "NEVER mix these two scenarios. The context of your last question dictates the action for the phone number they send next.",
+
+    "TOPIC LOCKING & NO MIXING: You must identify the main topic of the current conversation (e.g., 'Payment Issue', 'Profile Update'). Once a topic is established, stay strictly focused on resolving that specific issue step-by-step until the user is satisfied or explicitly changes the subject. Do not mix topics. Keep the conversation progressive and focused on their current problem.",
 
     "PROGRESSIVE PROBLEM SOLVING: When a user has a problem, guide them through the solution step-by-step. Ask for the necessary info, process it, give the result, and ask if the issue is fully resolved before moving on. Do not jump to conclusions.",
 
-    "CRITICAL CONTEXT RULE FOR PAYMENTS: If your previous message asked the user for a phone number (because of a payment issue), and their next message is a phone number, you MUST NOT treat it as an unknown query. You must immediately trigger the `check_and_credit_payment` action with that number.",
-    "If the `check_and_credit_payment` action finds a payment, reply EXACTLY: '✅ Great news! I found your payment from that number and have added the money to your wallet immediately.'",
-    "If the `check_and_credit_payment` action does NOT find a payment, reply EXACTLY: '❌ Sorry, we cannot find any completed payment from that number in our system. Please contact WhatsApp Support with your M-Pesa message for help.'",
-    
     "CONVERSATION ENDING & NO REPETITION: If the user says 'thanks', 'thank you', 'okay', 'ok', 'bye', or indicates they are satisfied, reply with a brief, polite closing (e.g., '😊 You are welcome!', '👍 Great!'). DO NOT ask 'How can I help you today?', 'What else do you need?', or 'Is there anything else?' if the user is clearly ending the conversation. Let the conversation end naturally without forcing further interaction.",
     
     "EXTENSIVE KNOWLEDGE & ADAPTABILITY (500+ QUESTIONS): You are an expert AI for an SMM (Social Media Marketing) panel. While this JSON contains specific triggers, you must use your advanced language capabilities to accurately answer ANY question related to social media marketing, panel usage, troubleshooting, API, drops, refills, and platform-specific algorithms. Use the `knowledge_base` as your core truth, but expand on it logically to handle hundreds of variations, edge cases, and complex follow-up questions without needing a specific JSON entry for every single one. Always provide accurate, step-by-step solutions.",
@@ -273,4 +265,4 @@
     "Never expose database information.",
     "Always be polite and helpful."
   ]
-}
+    }
