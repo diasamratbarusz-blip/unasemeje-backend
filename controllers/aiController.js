@@ -149,8 +149,7 @@ async function processInternalAI(message, context = {}) {
     const rawMessage = message.trim();
     const recentLogs = context.recentLogs || [];
 
-    // 🚨 NEW: CONTEXT-AWARE HANDLING (Topic Locking & Progressive Problem Solving)
-    // We check the immediate previous AI message to know exactly what the user is responding to.
+    // 🚨 CONTEXT-AWARE HANDLING (Topic Locking & Progressive Problem Solving)
     if (context.userId && recentLogs.length > 0) {
         const lastLog = recentLogs[0]; // The most recent log is the previous turn
         const lastAiReply = lastLog.aiReply.toLowerCase();
@@ -162,16 +161,31 @@ async function processInternalAI(message, context = {}) {
         if (isPhoneNumber && (lastAiReply.includes("payment") || lastAiReply.includes("wallet") || lastAiReply.includes("credited") || lastAiReply.includes("check our system") || lastAiReply.includes("money") || lastAiReply.includes("send me the exact phone"))) {
             try {
                 const cleanPhone = rawMessage.replace(/\s/g, '');
+                
+                // 🚨 NEW: Fetch user's extra funding numbers to verify and process payment
+                const currentUser = await User.findById(context.userId);
+                const extraNumbers = currentUser ? (currentUser.extraFundingNumbers || []) : [];
+                
+                // Check if the provided number is registered (main phone or extra funding number)
+                // ⚠️ Note: Adjust 'phone' to match your main phone number field in the User schema
+                const isRegistered = currentUser && (currentUser.phone === cleanPhone || extraNumbers.includes(cleanPhone));
+                
+                // Fetch the payment for this number
                 const payment = await Payment.findOne({ phone: cleanPhone, status: 'completed', credited: false }).sort({ createdAt: -1 });
                 
                 if (payment) {
-                    // Credit the user's wallet immediately
-                    await User.findByIdAndUpdate(context.userId, { $inc: { balance: payment.amount } });
-                    payment.credited = true;
-                    await payment.save();
-                    return `✅ Great news! I found your payment from ${cleanPhone} and have added the money to your wallet immediately.`;
+                    // If the number is registered, credit it immediately
+                    if (isRegistered) {
+                        await User.findByIdAndUpdate(context.userId, { $inc: { balance: payment.amount } });
+                        payment.credited = true;
+                        await payment.save();
+                        return `✅ Great news! I found your payment from ${cleanPhone} (which is registered in your funding numbers) and have added the money to your wallet immediately.`;
+                    } else {
+                        // If payment exists but number is NOT registered, tell them to register it first
+                        return `⚠️ I found a completed payment from ${cleanPhone}, but this number is NOT saved in your profile or extra funding numbers. Please add it to your extra funding numbers first, then ask me to check the payment again!`;
+                    }
                 } else {
-                    return `❌ Sorry, we cannot find any completed payment from ${cleanPhone} in our system. Please contact WhatsApp Support with your M-Pesa message.`;
+                    return `❌ Sorry, we cannot find any completed uncredited payment from ${cleanPhone} in our system. Please contact WhatsApp Support with your M-Pesa message.`;
                 }
             } catch (err) {
                 console.error("Payment check error:", err);
@@ -183,11 +197,27 @@ async function processInternalAI(message, context = {}) {
         else if (isPhoneNumber && (lastAiReply.includes("profile") || lastAiReply.includes("update") || lastAiReply.includes("register") || lastAiReply.includes("funding number") || lastAiReply.includes("save it to your profile") || lastAiReply.includes("what you want to change"))) {
             try {
                 const cleanPhone = rawMessage.replace(/\s/g, '');
-                // ⚠️ Note: Adjust 'extraFundingNumbers' to match the exact array field name in your User schema
+                
+                // 🚨 NEW: Fetch existing extra funding numbers to check for duplicates and limits
+                const currentUser = await User.findById(context.userId);
+                const existingExtraNumbers = currentUser ? (currentUser.extraFundingNumbers || []) : [];
+                
+                // Check if the number is already in the extra funding numbers
+                if (existingExtraNumbers.includes(cleanPhone)) {
+                    return `ℹ️ The number ${cleanPhone} is already saved in your extra funding numbers! No need to update it.`;
+                }
+                
+                // Check if they reached the limit (e.g., max 2 extra numbers)
+                if (existingExtraNumbers.length >= 2) {
+                    return `⚠️ You have reached the maximum limit of 2 extra funding numbers. You cannot add more. Please contact support if you need to change them.`;
+                }
+                
+                // Add the new number
                 await User.findByIdAndUpdate(context.userId, { 
                     $addToSet: { extraFundingNumbers: cleanPhone } 
                 });
-                return `✅ Success! Your profile has been updated. The new funding number ${cleanPhone} has been saved to your account for future deposits.`;
+                
+                return `✅ Success! Your profile has been updated. The new funding number ${cleanPhone} has been saved to your extra funding numbers for future deposits.`;
             } catch (err) {
                 console.error("Profile update error:", err);
                 return "❌ An error occurred while updating your profile. Please try again or contact support.";
@@ -198,7 +228,7 @@ async function processInternalAI(message, context = {}) {
         else if (!isPhoneNumber && (lastAiReply.includes("what you want to change") || lastAiReply.includes("update some of your account details"))) {
             try {
                 const newName = rawMessage;
-                // ⚠️ Note: Adjust 'name' or 'displayName' to match the exact field name in your User schema
+                // ⚠️ Note: Adjust 'name' to match the exact field name in your User schema
                 await User.findByIdAndUpdate(context.userId, { name: newName }); 
                 return `✅ Success! Your display name has been updated to "${newName}".`;
             } catch (err) {
