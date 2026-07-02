@@ -427,6 +427,82 @@ app.get("/api/paynecta/verify", auth, async (req, res) => {
     }
 });
 
+/**
+ * =========================================
+ * NEW: PAYMENT INITIATION ENDPOINT (STK PUSH)
+ * =========================================
+ */
+app.post("/api/payment/initiate", auth, async (req, res) => {
+    try {
+        let { amount, phone } = req.body;
+        
+        // Validation
+        if (!amount || !phone) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "Amount and phone number are required" 
+            });
+        }
+
+        if (Number(amount) < 2) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "Minimum amount is KES 2" 
+            });
+        }
+        
+        // Format phone number
+        let formatted = String(phone).replace(/\D/g, "");
+        if (formatted.startsWith("0")) formatted = "254" + formatted.substring(1);
+        if (formatted.startsWith("7") || formatted.startsWith("1")) formatted = "254" + formatted;
+        if (!formatted.startsWith("254")) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "Invalid phone number format" 
+            });
+        }
+
+        console.log(`[PAYMENT INITIATE] Amount: KES ${amount}, Phone: ${formatted}`);
+
+        // Call PayNecta API
+        const response = await axios.post(
+            `${PAYNECTA_BASE_URL}/payment/initialize`, 
+            { 
+                amount: Number(amount), 
+                mobile_number: formatted, 
+                code: "600" 
+            },
+            { 
+                headers: { 
+                    "X-API-Key": process.env.PAYNECTA_API_KEY, 
+                    "X-User-Email": ADMIN_EMAIL 
+                },
+                timeout: 30000 // 30 second timeout
+            }
+        );
+
+        console.log(`[PAYMENT INITIATE] Success:`, response.data);
+
+        res.json({ 
+            success: true, 
+            message: "STK push sent successfully",
+            data: response.data 
+        });
+    } catch (error) {
+        console.error("[PAYMENT INITIATE] Error:", error.response?.data || error.message);
+        
+        const errorMessage = error.response?.data?.message || 
+                           error.response?.data?.error || 
+                           error.message || 
+                           "Failed to initiate payment";
+        
+        res.status(500).json({ 
+            success: false, 
+            error: errorMessage 
+        });
+    }
+});
+
 app.post("/api/paynecta/stkpush", auth, async (req, res) => {
     try {
         let { amount, phone } = req.body;
@@ -710,6 +786,19 @@ app.get("/api/sync-orders", auth, async (req, res) => {
  * DEPOSITS & SUPREME ADMIN CONTROL CENTER
  * =========================================
  */
+app.get("/api/deposits", auth, async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 10;
+        const deposits = await Deposit.find({ userId: req.user.id })
+            .sort({ createdAt: -1 })
+            .limit(limit);
+        res.json(deposits);
+    } catch (err) {
+        console.error("Deposits fetch error:", err);
+        res.status(500).json({ error: "Failed to fetch deposits" });
+    }
+});
+
 app.post("/api/deposit", auth, async (req, res) => {
     try {
         const { amount, transactionCode } = req.body;
