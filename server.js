@@ -40,7 +40,8 @@ const chatBanSchema = new mongoose.Schema({
 const ChatBan = mongoose.models.ChatBan || mongoose.model('ChatBan', chatBanSchema);
 
 // ================= CONFIGURATION & CONSTANTS =================
-const ADMIN_EMAIL = "diasamratbarusz@gmail.com".toLowerCase();
+// 🔧 FIXED: Use environment variable for PayNecta email (falls back to hardcoded value)
+const ADMIN_EMAIL = (process.env.PAYNECTA_USER_EMAIL || "diasamratbarusz@gmail.com").toLowerCase();
 const ADMIN_PHONE = "0715509440";
 
 const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
@@ -141,6 +142,13 @@ if (!process.env.VERCEL) {
                 "Paynecta API:",
                 process.env.PAYNECTA_API_KEY ? "✅ CONNECTED" : "❌ NO API KEY"
             );
+            
+            // 🔧 NEW: Log which email is being used for PayNecta
+            console.log(
+                "Paynecta Email:",
+                ADMIN_EMAIL,
+                process.env.PAYNECTA_USER_EMAIL ? "✅ FROM ENV" : "⚠️ USING DEFAULT"
+            );
 
             verifyPaynecta();
         })
@@ -156,22 +164,35 @@ if (!process.env.VERCEL) {
  */
 async function verifyPaynecta() {
     try {
+        console.log(`\n[PAYNECTA VERIFY] Testing connection with email: ${ADMIN_EMAIL}`);
+        
         const response = await axios.get(
             `${PAYNECTA_BASE_URL}/auth/verify`,
             {
                 headers: {
                     "X-API-Key": process.env.PAYNECTA_API_KEY,
                     "X-User-Email": ADMIN_EMAIL
-                }
+                },
+                timeout: 10000
             }
         );
+        
         if (response.data && response.data.success) {
             console.log("✅ Paynecta Verified:", response.data.data?.email || ADMIN_EMAIL);
+            console.log("✅ PayNecta connection is working correctly!\n");
         } else {
             console.log("❌ Paynecta Verification Failed");
+            console.log("❌ Response:", response.data, "\n");
         }
     } catch (error) {
         console.log("❌ Paynecta Verify Error:", error.response?.data || error.message);
+        
+        // 🔧 NEW: Provide helpful error message
+        if (error.response?.data?.error === 'USER_NOT_FOUND') {
+            console.log("\n⚠️  IMPORTANT: The email '" + ADMIN_EMAIL + "' is NOT registered in PayNecta!");
+            console.log("⚠️  Please check your PayNecta dashboard for the correct email.");
+            console.log("⚠️  Then set it in your environment variables as PAYNECTA_USER_EMAIL\n");
+        }
     }
 }
 
@@ -236,14 +257,12 @@ async function giveReferralBonus(userId, orderCost) {
 }
 
 function cleanServiceName(name = "") {
-    // FIXED: Only remove backslashes, preserve all other text including brackets
     return String(name || "").replace(/\\/g, "").trim() || "SMM Service";
 }
 
 function detectPlatform(service = {}) {
     const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
     
-    // FIXED: More robust platform detection with additional keywords
     if (/(instagram|insta|ig)/.test(text)) return "Instagram";
     if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
     if (/(youtube|yt)/.test(text)) return "YouTube";
@@ -429,7 +448,7 @@ app.get("/api/paynecta/verify", auth, async (req, res) => {
 
 /**
  * =========================================
- * IMPROVED: PAYMENT INITIATION ENDPOINT (STK PUSH)
+ * 🔧 FIXED: PAYMENT INITIATION ENDPOINT (STK PUSH)
  * =========================================
  */
 app.post("/api/payment/initiate", auth, async (req, res) => {
@@ -437,6 +456,7 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         let { amount, phone } = req.body;
         
         console.log(`\n[PAYMENT INITIATE] ====== NEW REQUEST ======`);
+        console.log(`[PAYMENT INITIATE] Using PayNecta Email: ${ADMIN_EMAIL}`);
         console.log(`[PAYMENT INITIATE] Raw input:`, { amount, phone });
         
         // Validation
@@ -487,96 +507,71 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         }
 
         console.log(`[PAYMENT INITIATE] ✅ Final formatted: Amount=KES ${amount}, Phone=${formatted}`);
+        console.log(`[PAYMENT INITIATE] Sending to PayNecta with email: ${ADMIN_EMAIL}`);
 
-        // Try multiple PayNecta endpoints for compatibility
-        const endpoints = [
-            {
-                url: `${PAYNECTA_BASE_URL}/payment/initialize`,
-                payload: { 
+        // 🔧 FIXED: Try the primary endpoint first (most reliable)
+        try {
+            const response = await axios.post(
+                `${PAYNECTA_BASE_URL}/payment/initialize`,
+                { 
                     amount: Number(amount), 
                     mobile_number: formatted, 
                     code: "600" 
+                },
+                { 
+                    headers: { 
+                        "X-API-Key": process.env.PAYNECTA_API_KEY, 
+                        "X-User-Email": ADMIN_EMAIL,
+                        "Content-Type": "application/json"
+                    },
+                    timeout: 30000
                 }
-            },
-            {
-                url: `${PAYNECTA_BASE_URL}/stk/push`,
-                payload: { 
-                    amount: Number(amount), 
-                    phone: formatted,
-                    callback_url: `${process.env.BASE_URL || 'https://unasemeje-backend.vercel.app'}/api/webhook`
-                }
-            },
-            {
-                url: `${PAYNECTA_BASE_URL}/payment/stkpush`,
-                payload: { 
-                    amount: Number(amount), 
-                    mobile_number: formatted,
-                    reference: `DEPOSIT-${Date.now()}`
-                }
+            );
+            
+            console.log(`[PAYMENT INITIATE] ✅ Success!`);
+            console.log(`[PAYMENT INITIATE] Response:`, response.data);
+
+            res.json({ 
+                success: true, 
+                message: "STK push sent successfully. Check your phone for the M-Pesa prompt.",
+                data: response.data 
+            });
+            
+        } catch (error) {
+            console.error(`[PAYMENT INITIATE] ❌ PayNecta Error:`, error.response?.data || error.message);
+            
+            // 🔧 FIXED: Provide specific error messages based on PayNecta response
+            const paynectaError = error.response?.data;
+            
+            if (paynectaError?.error === 'USER_NOT_FOUND') {
+                return res.status(500).json({ 
+                    success: false, 
+                    error: `Payment system misconfigured. Email '${ADMIN_EMAIL}' not registered with PayNecta.`,
+                    details: "Please contact support to fix this issue."
+                });
             }
-        ];
-
-        let response = null;
-        let lastError = null;
-
-        for (let i = 0; i < endpoints.length; i++) {
-            const endpoint = endpoints[i];
-            try {
-                console.log(`[PAYMENT INITIATE] 🔄 Trying endpoint ${i + 1}/${endpoints.length}: ${endpoint.url}`);
-                
-                response = await axios.post(
-                    endpoint.url, 
-                    endpoint.payload,
-                    { 
-                        headers: { 
-                            "X-API-Key": process.env.PAYNECTA_API_KEY, 
-                            "X-User-Email": ADMIN_EMAIL,
-                            "Content-Type": "application/json"
-                        },
-                        timeout: 30000
-                    }
-                );
-                
-                console.log(`[PAYMENT INITIATE] ✅ Success with endpoint ${i + 1}`);
-                console.log(`[PAYMENT INITIATE] Response:`, response.data);
-                break;
-                
-            } catch (err) {
-                lastError = err;
-                const errorDetails = err.response?.data || err.message;
-                console.log(`[PAYMENT INITIATE] ❌ Endpoint ${i + 1} failed:`, errorDetails);
-                
-                // If it's a 4xx error (client error), don't try other endpoints
-                if (err.response?.status >= 400 && err.response?.status < 500) {
-                    console.log(`[PAYMENT INITIATE] ⚠️ Client error, stopping attempts`);
-                    break;
-                }
-                
-                continue;
+            
+            if (paynectaError?.error === 'INVALID_API_KEY') {
+                return res.status(500).json({ 
+                    success: false, 
+                    error: "Payment service authentication failed.",
+                    details: "Please contact support."
+                });
             }
-        }
-
-        if (!response) {
-            console.error(`[PAYMENT INITIATE] ❌ All endpoints failed`);
-            const errorMessage = lastError?.response?.data?.message || 
-                               lastError?.response?.data?.error || 
-                               lastError?.message || 
-                               "Payment service temporarily unavailable";
+            
+            if (error.code === 'ECONNABORTED') {
+                return res.status(504).json({ 
+                    success: false, 
+                    error: "Payment request timed out. Please try again."
+                });
+            }
             
             return res.status(500).json({ 
                 success: false, 
-                error: errorMessage,
-                details: "Please try again in a moment or contact support"
+                error: paynectaError?.message || "Failed to initiate payment",
+                details: paynectaError?.error || error.message
             });
         }
-
-        console.log(`[PAYMENT INITIATE] ✅ Payment initiated successfully`);
-
-        res.json({ 
-            success: true, 
-            message: "STK push sent successfully. Check your phone for the M-Pesa prompt.",
-            data: response.data 
-        });
         
     } catch (error) {
         console.error(`[PAYMENT INITIATE] ❌ Unexpected error:`, error);
@@ -598,6 +593,8 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
 app.get("/api/payment/test", auth, async (req, res) => {
     try {
         console.log(`[PAYMENT TEST] Testing PayNecta connection...`);
+        console.log(`[PAYMENT TEST] Using email: ${ADMIN_EMAIL}`);
+        console.log(`[PAYMENT TEST] API Key exists: ${!!process.env.PAYNECTA_API_KEY}`);
         
         // Test 1: Check API key
         if (!process.env.PAYNECTA_API_KEY) {
@@ -606,7 +603,8 @@ app.get("/api/payment/test", auth, async (req, res) => {
                 error: "PAYNECTA_API_KEY not configured",
                 checks: {
                     apiKey: false,
-                    connection: false
+                    connection: false,
+                    email: ADMIN_EMAIL
                 }
             });
         }
@@ -628,7 +626,8 @@ app.get("/api/payment/test", auth, async (req, res) => {
             checks: {
                 apiKey: true,
                 connection: true,
-                email: response.data?.data?.email || ADMIN_EMAIL
+                email: ADMIN_EMAIL,
+                paynectaEmail: response.data?.data?.email || "Unknown"
             }
         });
         
@@ -638,9 +637,11 @@ app.get("/api/payment/test", auth, async (req, res) => {
         res.json({
             success: false,
             error: error.response?.data?.message || error.message,
+            paynectaError: error.response?.data,
             checks: {
                 apiKey: !!process.env.PAYNECTA_API_KEY,
-                connection: false
+                connection: false,
+                email: ADMIN_EMAIL
             }
         });
     }
@@ -661,7 +662,7 @@ app.post("/api/paynecta/stkpush", auth, async (req, res) => {
         );
         res.json({ success: true, data: response.data });
     } catch (error) {
-        res.status(500).json({ error: "STK push failed" });
+        res.status(500).json({ error: "STK push failed", details: error.response?.data });
     }
 });
 
@@ -808,7 +809,6 @@ app.get("/api/services", async (req, res) => {
     try {
         let services = await Service.find();
         
-        // Force refresh if requested or if no services exist
         if (!services.length || req.query.refresh === "true") {
             console.log("🔄 Fetching fresh services from Delixgains provider...");
             
@@ -821,14 +821,10 @@ app.get("/api/services", async (req, res) => {
             if (list.length > 0) {
                 console.log(`📦 Received ${list.length} services from provider`);
                 
-                // Clear existing services
                 await Service.deleteMany({});
                 
-                // Map services with EXACT category names from provider
                 const mapped = list.map(s => {
-                    // FIXED: Preserve EXACT category name from provider
                     const categoryName = String(s.category || "General").trim();
-                    // FIXED: Only clean backslashes, preserve brackets and all text
                     const serviceName = cleanServiceName(s.name);
                     const platform = detectPlatform(s);
                     
@@ -840,10 +836,10 @@ app.get("/api/services", async (req, res) => {
                         rate: Number(s.rate || 0),
                         min: Number(s.min || 1),
                         max: Number(s.max || 10000),
-                        category: categoryName, // PRESERVE EXACT CATEGORY NAME FROM PROVIDER
+                        category: categoryName,
                         platform: platform,
-                        type: s.type || "", // Store service type for comment detection
-                        description: s.description || "" // Store description if available
+                        type: s.type || "",
+                        description: s.description || ""
                     };
                 });
                 
@@ -853,7 +849,6 @@ app.get("/api/services", async (req, res) => {
             }
         }
         
-        // Group services by platform and category (EXACT STRUCTURE FROM PROVIDER)
         const grouped = {};
         services.forEach(s => {
             if (!grouped[s.platform]) {
@@ -868,7 +863,6 @@ app.get("/api/services", async (req, res) => {
             });
         });
         
-        // Log the structure for debugging
         Object.keys(grouped).forEach(platform => {
             const categories = Object.keys(grouped[platform]);
             const totalServices = categories.reduce((sum, cat) => sum + grouped[platform][cat].length, 0);
@@ -1342,26 +1336,22 @@ try {
     console.warn("⚠️ knowledge_base.json not found in root directory. Internal AI will use fallback responses.");
 }
 
-// 🧠 NEW: ASYNC AI ENGINE WITH CONTEXT-AWARE PHONE HANDLING
 async function processInternalAI(message, context = {}) {
     const cleanMessage = message.toLowerCase().replace(/[^\w\s]/gi, '').trim();
     const rawMessage = message.trim();
     const recentLogs = context.recentLogs || [];
 
-    // 🚨 CONTEXT-AWARE HANDLING (Topic Locking & Progressive Problem Solving)
     if (context.userId && recentLogs.length > 0) {
-        const lastLog = recentLogs[0]; // The most recent log is the previous turn
+        const lastLog = recentLogs[0];
         const lastAiReply = lastLog.aiReply.toLowerCase();
         
         const phoneRegex = /^(07|01|\+254|2547|2541)\d{8,9}$/;
         const isPhoneNumber = phoneRegex.test(rawMessage.replace(/\s/g, ''));
 
-        // SCENARIO 1: PAYMENT CHECK (User sent a phone number after a payment issue prompt)
         if (isPhoneNumber && (lastAiReply.includes("payment") || lastAiReply.includes("wallet") || lastAiReply.includes("credited") || lastAiReply.includes("check our system") || lastAiReply.includes("money") || lastAiReply.includes("send me the exact phone"))) {
             try {
                 const cleanPhone = rawMessage.replace(/\s/g, '');
                 
-                // 🚨 Fetch user's registered phones to verify
                 const currentUser = await User.findById(context.userId);
                 const registeredPhones = [
                     currentUser.phone,
@@ -1372,12 +1362,10 @@ async function processInternalAI(message, context = {}) {
                 
                 const isRegistered = registeredPhones.includes(cleanPhone);
                 
-                // Check Deposit model for uncredited (pending) payment
                 const uncreditedPayment = await Deposit.findOne({ phone: cleanPhone, status: 'pending' }).sort({ createdAt: -1 });
                 
                 if (uncreditedPayment) {
                     if (isRegistered) {
-                        // Auto-approve and credit the wallet instantly!
                         const user = await User.findById(context.userId);
                         user.balance += uncreditedPayment.amount;
                         uncreditedPayment.status = 'completed';
@@ -1388,7 +1376,6 @@ async function processInternalAI(message, context = {}) {
                         return `⚠️ I found a pending payment from ${cleanPhone}, but this number is NOT saved in your profile or payment nodes. Please add it to your payment nodes first, then ask me to check the payment again!`;
                     }
                 } else {
-                    // Check if it's already completed
                     const anyPayment = await Deposit.findOne({ phone: cleanPhone }).sort({ createdAt: -1 });
                     if (anyPayment && anyPayment.status === 'completed') {
                          return `ℹ️ I see a payment from ${cleanPhone}, but it has already been credited to your wallet.`;
@@ -1401,12 +1388,10 @@ async function processInternalAI(message, context = {}) {
             }
         } 
         
-        // SCENARIO 2: PROFILE UPDATE - PHONE (User sent a phone number after a profile update prompt)
         else if (isPhoneNumber && (lastAiReply.includes("profile") || lastAiReply.includes("update") || lastAiReply.includes("register") || lastAiReply.includes("funding number") || lastAiReply.includes("save it to your profile") || lastAiReply.includes("what you want to change"))) {
             try {
                 const cleanPhone = rawMessage.replace(/\s/g, '');
                 
-                // 🚨 Fetch existing phones to check for duplicates and limits
                 const currentUser = await User.findById(context.userId);
                 const existingPhones = [
                     currentUser.phone,
@@ -1419,7 +1404,6 @@ async function processInternalAI(message, context = {}) {
                     return `ℹ️ The number ${cleanPhone} is already saved in your profile! No need to update it.`;
                 }
                 
-                // Find the first empty payment phone slot
                 let updatePayload = {};
                 if (!currentUser.paymentPhone1) {
                     updatePayload.paymentPhone1 = cleanPhone;
@@ -1439,11 +1423,9 @@ async function processInternalAI(message, context = {}) {
             }
         }
 
-        // SCENARIO 3: PROFILE UPDATE - NAME (User sent a name after a profile update prompt)
         else if (!isPhoneNumber && (lastAiReply.includes("what you want to change") || lastAiReply.includes("update some of your account details"))) {
             try {
                 const newName = rawMessage;
-                // Update the display name fields
                 await User.findByIdAndUpdate(context.userId, { $set: { firstName: newName, paymentProfileName: newName } }); 
                 return `✅ Success! Your display name has been updated to "${newName}".`;
             } catch (err) {
@@ -1453,9 +1435,6 @@ async function processInternalAI(message, context = {}) {
         }
     }
 
-    // ==========================================
-    // STANDARD FUZZY MATCHING (If no specific context action was triggered)
-    // ==========================================
     let bestMatch = null;
     let highestScore = 0;
 
@@ -1532,13 +1511,11 @@ app.post("/api/support-bot", auth, async (req, res) => {
         }
     } catch (err) { console.warn("AI Context Error."); }
 
-    // 🧠 Fetch recent chat history for context awareness (Topic Locking & Phone Scenarios)
     let recentLogs = [];
     try {
         recentLogs = await ChatLog.find({ userId }).sort({ createdAt: -1 }).limit(5);
     } catch (err) { console.warn("Could not fetch recent chat logs."); }
 
-    // 🧠 Process AI with context (NOW ASYNC to handle DB actions)
     let aiReply = await processInternalAI(userMessage, { 
         balance: userBalance, 
         activeOrders, 
