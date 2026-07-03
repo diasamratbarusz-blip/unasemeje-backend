@@ -47,10 +47,9 @@ const PAYNECTA_BASE_URL = "https://paynecta.co.ke/api/v1";
 
 const PAYNECTA_PAYMENT_PAGE =
     process.env.PAYNECTA_PAYMENT_PAGE ||
-    "https://paynecta.co.ke/pay/unasemeje-";
+    "https://paynecta.co.ke/pay/unasemeje";
 
-// 🔧 NEW: Payment code from your PayNecta link
-const PAYNECTA_PAYMENT_CODE = process.env.PAYNECTA_PAYMENT_CODE || "unasemeje-";
+const PAYNECTA_PAYMENT_CODE = process.env.PAYNECTA_PAYMENT_CODE || "PNT_488024";
 
 const app = express();
 
@@ -289,7 +288,9 @@ function applyFinalPrice(originalRate, name) {
 
 /**
  * =========================================
- * PAYNECTA WEBHOOK
+ * 🔧 FIXED: SECURE PAYNECTA WEBHOOK HANDLER
+ * Credits deposit to the user who INITIATED the payment,
+ * NOT to whoever has that phone number registered
  * =========================================
  */
 const handlePaynectaWebhook = async (req, res) => {
@@ -298,60 +299,72 @@ const handlePaynectaWebhook = async (req, res) => {
         const { event_type, data } = event;
         const transaction = data?.transaction || {};
 
-        let phone = transaction.mobile_number || data?.PhoneNumber || data?.phone;
+        console.log(`\n[WEBHOOK] ====== PAYNECTA WEBHOOK RECEIVED ======`);
+        console.log(`[WEBHOOK] Event Type: ${event_type}`);
+        console.log(`[WEBHOOK] Data:`, data);
 
-        if (event_type === "payment.completed" && phone) {
-            let cleanPhone = String(phone).replace(/[\s+]/g, '');
-            let corePhone = cleanPhone;
-            if (corePhone.startsWith("254")) corePhone = corePhone.substring(3);
-            if (corePhone.startsWith("0")) corePhone = corePhone.substring(1);
+        if (event_type === "payment.completed") {
+            const transactionRef = data?.transaction_reference || 
+                                 transaction?.reference || 
+                                 data?.CheckoutRequestID;
+            
+            const amount = Number(transaction.amount || data?.amount || 0);
+            const phone = transaction.mobile_number || data?.PhoneNumber || data?.phone;
+            
+            console.log(`[WEBHOOK] Transaction Ref: ${transactionRef}`);
+            console.log(`[WEBHOOK] Amount: KES ${amount}, Phone: ${phone}`);
 
-            console.log(`[Webhook] Payment Detected for Core Phone: ${corePhone}`);
-
-            const user = await User.findOne({
+            // 🔒 STEP 1: Find the pending deposit by transaction reference
+            // This ensures we credit the user who INITIATED the payment
+            const pendingDeposit = await Deposit.findOne({
                 $or: [
-                    { phone: { $regex: corePhone } },
-                    { paymentPhone1: { $regex: corePhone } },
-                    { paymentPhone2: { $regex: corePhone } },
-                    { paymentPhone3: { $regex: corePhone } }
-                ]
+                    { transactionCode: transactionRef },
+                    { code: transactionRef }
+                ],
+                status: "pending"
             });
 
-            if (user) {
-                const transCode = data?.MpesaReceiptNumber || transaction.reference || `TRX-${Date.now()}`;
-                
-                const existingDeposit = await Deposit.findOne({ 
-                    $or: [
-                        { transactionCode: transCode },
-                        { code: transCode }
-                    ]
-                });
-
-                if (!existingDeposit) {
-                    const amount = Number(transaction.amount || data?.amount || 0);
-                    
-                    await Deposit.create({
-                        userId: user._id,
-                        userEmail: user.email,
-                        phone: cleanPhone,
-                        amount: amount,
-                        transactionCode: transCode,
-                        code: transCode,
-                        source: "stk",
-                        status: "completed",
-                        message: `Automatic Funding via Paynecta Hook (${cleanPhone})`
-                    });
-
-                    user.balance += amount;
-                    await user.save();
-                    
-                    log(`INSTANT FUNDING: ${user.username} | +KES ${amount} | TRX: ${transCode}`);
-                }
+            if (!pendingDeposit) {
+                console.log(`[WEBHOOK] ⚠️ No pending deposit found for transaction: ${transactionRef}`);
+                console.log(`[WEBHOOK] This might be a duplicate or already processed webhook`);
+                return res.status(200).send("Webhook received but no pending deposit found");
             }
+
+            console.log(`[WEBHOOK] ✅ Found pending deposit:`, pendingDeposit);
+
+            // 🔒 STEP 2: Verify amount matches (security check)
+            if (Math.abs(pendingDeposit.amount - amount) > 0.01) {
+                console.log(`[WEBHOOK] ❌ Amount mismatch! Expected: ${pendingDeposit.amount}, Received: ${amount}`);
+                return res.status(400).send("Amount mismatch");
+            }
+
+            // 🔒 STEP 3: Credit the user who INITIATED the payment
+            const user = await User.findById(pendingDeposit.userId);
+            
+            if (!user) {
+                console.log(`[WEBHOOK] ❌ User not found for deposit: ${pendingDeposit.userId}`);
+                return res.status(404).send("User not found");
+            }
+
+            // Update user balance
+            user.balance += amount;
+            await user.save();
+
+            // Update deposit status
+            pendingDeposit.status = "completed";
+            pendingDeposit.message = `Payment completed via PayNecta webhook. Transaction: ${transactionRef}`;
+            await pendingDeposit.save();
+
+            console.log(`[WEBHOOK] ✅ SUCCESS! Credited KES ${amount} to ${user.email} (${user.username})`);
+            console.log(`[WEBHOOK] New balance: KES ${user.balance}`);
+
+            log(`WEBHOOK FUNDING: ${user.username} | +KES ${amount} | TRX: ${transactionRef}`);
         }
         
-        res.status(200).send("Webhook received and processed");
+        res.status(200).send("Webhook received and processed successfully");
+        
     } catch (err) {
+        console.error(`[WEBHOOK] ❌ Error:`, err);
         log(`Webhook Processing Error: ${err.message}`);
         res.status(500).send("Error processing webhook");
     }
@@ -454,6 +467,9 @@ app.get("/api/paynecta/verify", auth, async (req, res) => {
 /**
  * =========================================
  * 🔧 FIXED: PAYMENT INITIATION ENDPOINT (STK PUSH)
+ * - Does NOT save phone number permanently to user account
+ * - Creates pending deposit record linked to authenticated user
+ * - Phone number is only stored in deposit record for tracking
  * =========================================
  */
 app.post("/api/payment/initiate", auth, async (req, res) => {
@@ -461,6 +477,7 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         let { amount, phone } = req.body;
         
         console.log(`\n[PAYMENT INITIATE] ====== NEW REQUEST ======`);
+        console.log(`[PAYMENT INITIATE] User ID: ${req.user.id}`);
         console.log(`[PAYMENT INITIATE] Using PayNecta Email: ${ADMIN_EMAIL}`);
         console.log(`[PAYMENT INITIATE] Using Payment Code: ${PAYNECTA_PAYMENT_CODE}`);
         console.log(`[PAYMENT INITIATE] Raw input:`, { amount, phone });
@@ -506,7 +523,19 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
 
         console.log(`[PAYMENT INITIATE] ✅ Final formatted: Amount=KES ${amount}, Phone=${formatted}`);
 
-        // 🔧 FIXED: Use the payment link slug as the code
+        // 🔒 Get authenticated user
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ 
+                success: false, 
+                error: "User not found" 
+            });
+        }
+
+        // 🔧 NOTE: Phone number is NOT saved to user's account
+        // It's only stored in the deposit record for tracking purposes
+
+        // 🔧 Call PayNecta API
         const payload = { 
             code: PAYNECTA_PAYMENT_CODE,
             mobile_number: formatted,
@@ -515,88 +544,96 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         
         console.log(`[PAYMENT INITIATE] Payload being sent:`, payload);
 
-        try {
-            const response = await axios.post(
-                `${PAYNECTA_BASE_URL}/payment/initialize`,
-                payload,
-                { 
-                    headers: { 
-                        "X-API-Key": process.env.PAYNECTA_API_KEY, 
-                        "X-User-Email": ADMIN_EMAIL,
-                        "Content-Type": "application/json"
-                    },
-                    timeout: 30000
-                }
-            );
-            
-            console.log(`[PAYMENT INITIATE] ✅ Success!`);
-            console.log(`[PAYMENT INITIATE] Response:`, response.data);
+        const response = await axios.post(
+            `${PAYNECTA_BASE_URL}/payment/initialize`,
+            payload,
+            { 
+                headers: { 
+                    "X-API-Key": process.env.PAYNECTA_API_KEY, 
+                    "X-User-Email": ADMIN_EMAIL,
+                    "Content-Type": "application/json"
+                },
+                timeout: 30000
+            }
+        );
+        
+        console.log(`[PAYMENT INITIATE] ✅ Success!`);
+        console.log(`[PAYMENT INITIATE] Response:`, response.data);
 
-            res.json({ 
-                success: true, 
-                message: "STK push sent successfully. Check your phone for the M-Pesa prompt.",
-                data: response.data 
-            });
-            
-        } catch (error) {
-            console.error(`[PAYMENT INITIATE] ❌ PayNecta Error:`, error.response?.data || error.message);
-            
-            const paynectaError = error.response?.data;
-            
-            if (paynectaError?.error === 'USER_NOT_FOUND') {
-                return res.status(500).json({ 
-                    success: false, 
-                    error: `Payment system misconfigured. Email '${ADMIN_EMAIL}' not registered with PayNecta.`,
-                    details: "Please contact support to fix this issue."
-                });
-            }
-            
-            if (paynectaError?.error === 'INVALID_API_KEY' || paynectaError?.error === 'UNAUTHORIZED') {
-                return res.status(500).json({ 
-                    success: false, 
-                    error: "Payment service authentication failed.",
-                    details: "Please contact support."
-                });
-            }
-            
-            if (paynectaError?.error === 'FORBIDDEN') {
-                return res.status(500).json({ 
-                    success: false, 
-                    error: "Insufficient service tokens. Please contact support.",
-                    details: paynectaError.message
-                });
-            }
-            
-            if (paynectaError?.error === 'NOT_FOUND') {
-                return res.status(500).json({ 
-                    success: false, 
-                    error: "Payment link not found. Check your PAYNECTA_PAYMENT_CODE.",
-                    details: `Code used: ${PAYNECTA_PAYMENT_CODE}`
-                });
-            }
-            
-            if (error.code === 'ECONNABORTED') {
-                return res.status(504).json({ 
-                    success: false, 
-                    error: "Payment request timed out. Please try again."
-                });
-            }
-            
+        // 🔒 Create pending deposit record linked to THIS user
+        const transactionRef = response.data?.data?.transaction_reference || 
+                              response.data?.data?.CheckoutRequestID || 
+                              `TRX-${Date.now()}`;
+
+        await Deposit.create({
+            userId: req.user.id,  // 🔒 CRITICAL: Link to authenticated user
+            userEmail: user.email,
+            phone: formatted,  // 🔒 Phone stored here for tracking only
+            amount: Number(amount),
+            transactionCode: transactionRef,
+            code: transactionRef,
+            source: "stk",
+            status: "pending",  // Will be updated to "completed" by webhook
+            message: `STK Push initiated for KES ${amount} from ${formatted}`
+        });
+
+        console.log(`[PAYMENT INITIATE] ✅ Created pending deposit record for user ${user.email}`);
+
+        res.json({ 
+            success: true, 
+            message: "STK push sent successfully. Check your phone for the M-Pesa prompt.",
+            data: response.data,
+            transactionReference: transactionRef
+        });
+        
+    } catch (error) {
+        console.error(`[PAYMENT INITIATE] ❌ PayNecta Error:`, error.response?.data || error.message);
+        
+        const paynectaError = error.response?.data;
+        
+        if (paynectaError?.error === 'USER_NOT_FOUND') {
             return res.status(500).json({ 
                 success: false, 
-                error: paynectaError?.message || "Failed to initiate payment",
-                details: paynectaError?.errors || paynectaError?.error || error.message
+                error: `Payment system misconfigured. Email '${ADMIN_EMAIL}' not registered with PayNecta.`,
+                details: "Please contact support to fix this issue."
             });
         }
         
-    } catch (error) {
-        console.error(`[PAYMENT INITIATE] ❌ Unexpected error:`, error);
-        console.error(`[PAYMENT INITIATE] Stack:`, error.stack);
+        if (paynectaError?.error === 'INVALID_API_KEY' || paynectaError?.error === 'UNAUTHORIZED') {
+            return res.status(500).json({ 
+                success: false, 
+                error: "Payment service authentication failed.",
+                details: "Please contact support."
+            });
+        }
         
-        res.status(500).json({ 
+        if (paynectaError?.error === 'FORBIDDEN') {
+            return res.status(500).json({ 
+                success: false, 
+                error: "Insufficient service tokens. Please contact support.",
+                details: paynectaError.message
+            });
+        }
+        
+        if (paynectaError?.error === 'NOT_FOUND') {
+            return res.status(500).json({ 
+                success: false, 
+                error: "Payment link not found. Check your PAYNECTA_PAYMENT_CODE.",
+                details: `Code used: ${PAYNECTA_PAYMENT_CODE}`
+            });
+        }
+        
+        if (error.code === 'ECONNABORTED') {
+            return res.status(504).json({ 
+                success: false, 
+                error: "Payment request timed out. Please try again."
+            });
+        }
+        
+        return res.status(500).json({ 
             success: false, 
-            error: error.message || "Failed to initiate payment",
-            details: "An unexpected error occurred. Please try again."
+            error: paynectaError?.message || "Failed to initiate payment",
+            details: paynectaError?.errors || paynectaError?.error || error.message
         });
     }
 });
@@ -1358,11 +1395,21 @@ try {
     console.warn("⚠️ knowledge_base.json not found in root directory. Internal AI will use fallback responses.");
 }
 
+/**
+ * =========================================
+ * 🔧 UPDATED: AI ENGINE WITH NEW PAYMENT KNOWLEDGE
+ * - Phone numbers used for deposits are NOT saved permanently
+ * - Deposits are credited to the account that initiated the payment
+ * - Any M-Pesa registered phone can be used for deposits
+ * - System uses transaction references to track payments
+ * =========================================
+ */
 async function processInternalAI(message, context = {}) {
     const cleanMessage = message.toLowerCase().replace(/[^\w\s]/gi, '').trim();
     const rawMessage = message.trim();
     const recentLogs = context.recentLogs || [];
 
+    // 🚨 CONTEXT-AWARE HANDLING
     if (context.userId && recentLogs.length > 0) {
         const lastLog = recentLogs[0];
         const lastAiReply = lastLog.aiReply.toLowerCase();
@@ -1370,39 +1417,44 @@ async function processInternalAI(message, context = {}) {
         const phoneRegex = /^(07|01|\+254|2547|2541)\d{8,9}$/;
         const isPhoneNumber = phoneRegex.test(rawMessage.replace(/\s/g, ''));
 
+        // SCENARIO 1: PAYMENT CHECK
         if (isPhoneNumber && (lastAiReply.includes("payment") || lastAiReply.includes("wallet") || lastAiReply.includes("credited") || lastAiReply.includes("check our system") || lastAiReply.includes("money") || lastAiReply.includes("send me the exact phone"))) {
             try {
                 const cleanPhone = rawMessage.replace(/\s/g, '');
                 
-                const currentUser = await User.findById(context.userId);
-                const registeredPhones = [
-                    currentUser.phone,
-                    currentUser.paymentPhone1,
-                    currentUser.paymentPhone2,
-                    currentUser.paymentPhone3
-                ].filter(Boolean);
+                // 🔧 UPDATED: Check for pending deposits with this phone number
+                // The deposit record contains the phone number used for that specific transaction
+                const pendingDeposit = await Deposit.findOne({ 
+                    phone: cleanPhone, 
+                    status: 'pending' 
+                }).sort({ createdAt: -1 });
                 
-                const isRegistered = registeredPhones.includes(cleanPhone);
-                
-                const uncreditedPayment = await Deposit.findOne({ phone: cleanPhone, status: 'pending' }).sort({ createdAt: -1 });
-                
-                if (uncreditedPayment) {
-                    if (isRegistered) {
+                if (pendingDeposit) {
+                    // Found a pending deposit - check if it belongs to current user
+                    if (pendingDeposit.userId.toString() === context.userId.toString()) {
+                        // Auto-approve and credit the wallet
                         const user = await User.findById(context.userId);
-                        user.balance += uncreditedPayment.amount;
-                        uncreditedPayment.status = 'completed';
+                        user.balance += pendingDeposit.amount;
+                        pendingDeposit.status = 'completed';
+                        pendingDeposit.message = `Auto-approved by AI Support. Phone: ${cleanPhone}`;
                         await user.save();
-                        await uncreditedPayment.save();
-                        return `✅ Great news! I found your pending payment from ${cleanPhone} (which is registered in your funding numbers) and have added the money to your wallet immediately.`;
+                        await pendingDeposit.save();
+                        return `✅ Great news! I found your pending payment of KES ${pendingDeposit.amount} and have added the money to your wallet immediately. Your new balance is KES ${user.balance.toLocaleString()}.`;
                     } else {
-                        return `⚠️ I found a pending payment from ${cleanPhone}, but this number is NOT saved in your profile or payment nodes. Please add it to your payment nodes first, then ask me to check the payment again!`;
+                        // This phone was used by another account - don't credit
+                        return `⚠️ I found a pending payment from ${cleanPhone}, but it belongs to a different account. Please login to the account that initiated this payment to check it.`;
                     }
                 } else {
-                    const anyPayment = await Deposit.findOne({ phone: cleanPhone }).sort({ createdAt: -1 });
+                    // Check if it's already completed
+                    const anyPayment = await Deposit.findOne({ 
+                        phone: cleanPhone,
+                        userId: context.userId
+                    }).sort({ createdAt: -1 });
+                    
                     if (anyPayment && anyPayment.status === 'completed') {
-                         return `ℹ️ I see a payment from ${cleanPhone}, but it has already been credited to your wallet.`;
+                         return `ℹ️ I see a completed payment from ${cleanPhone} of KES ${anyPayment.amount}. It has already been credited to your wallet.`;
                     }
-                    return `❌ Sorry, we cannot find any pending or uncredited payment from ${cleanPhone} in our system. Please contact WhatsApp Support with your M-Pesa message.`;
+                    return `❌ Sorry, we cannot find any pending payment from ${cleanPhone} in your account. Please contact WhatsApp Support with your M-Pesa message.`;
                 }
             } catch (err) {
                 console.error("Payment check error:", err);
@@ -1410,6 +1462,7 @@ async function processInternalAI(message, context = {}) {
             }
         } 
         
+        // SCENARIO 2: PROFILE UPDATE - PHONE
         else if (isPhoneNumber && (lastAiReply.includes("profile") || lastAiReply.includes("update") || lastAiReply.includes("register") || lastAiReply.includes("funding number") || lastAiReply.includes("save it to your profile") || lastAiReply.includes("what you want to change"))) {
             try {
                 const cleanPhone = rawMessage.replace(/\s/g, '');
@@ -1445,6 +1498,7 @@ async function processInternalAI(message, context = {}) {
             }
         }
 
+        // SCENARIO 3: PROFILE UPDATE - NAME
         else if (!isPhoneNumber && (lastAiReply.includes("what you want to change") || lastAiReply.includes("update some of your account details"))) {
             try {
                 const newName = rawMessage;
@@ -1457,6 +1511,9 @@ async function processInternalAI(message, context = {}) {
         }
     }
 
+    // ==========================================
+    // STANDARD FUZZY MATCHING
+    // ==========================================
     let bestMatch = null;
     let highestScore = 0;
 
@@ -1490,8 +1547,37 @@ async function processInternalAI(message, context = {}) {
         }
     }
 
+    // 🔧 UPDATED: Enhanced payment-related responses
     if (bestMatch && highestScore >= 5) {
         let finalAnswer = bestMatch.answer;
+        
+        // 🔧 NEW: Override payment-related answers with updated information
+        if (cleanMessage.includes("deposit") || cleanMessage.includes("add money") || cleanMessage.includes("fund") || cleanMessage.includes("payment")) {
+            finalAnswer = `💰 **How to Add Funds to Your Wallet:**
+
+Our new payment system is super flexible:
+
+✅ **Use ANY M-Pesa Phone Number** - You don't need to register your payment phone in advance. Just enter any M-Pesa registered number when making a deposit.
+
+✅ **Secure & Private** - The phone number you use is only stored for that specific transaction. It's NOT saved permanently to your account.
+
+✅ **Instant Credit** - Once you complete the M-Pesa PIN prompt, your wallet is credited automatically within seconds.
+
+✅ **Minimum Deposit:** KES 2
+
+**How it works:**
+1. Go to "Add Funds" page
+2. Enter amount (minimum KES 2)
+3. Enter any M-Pesa phone number
+4. Click "Send Payment Request"
+5. Check your phone for the M-Pesa prompt
+6. Enter your M-Pesa PIN
+7. Done! Your wallet is credited instantly
+
+**Important:** The money is credited to YOUR account (the one you're logged into), regardless of which phone number you use for the payment.
+
+Need help? Just ask me or click "Human Support"!`;
+        }
         
         if (bestMatch.action === 'fetch_balance') {
             finalAnswer = finalAnswer.replace('{balance}', Number(context.balance).toLocaleString('en-KE', { minimumFractionDigits: 2 }));
@@ -1502,7 +1588,16 @@ async function processInternalAI(message, context = {}) {
         return finalAnswer;
     }
     
-    return "🤔 I might need a bit more detail to give you the perfect answer! As your Unasemeje AI expert, I can help you with:\n\n• 💰 Deposits, M-Pesa issues, and wallet balance\n• 🚀 Placing orders, API access, and service pricing\n• 📦 Tracking orders, refills, and delivery speeds\n• 👤 Updating your profile and funding numbers\n\nCould you rephrase your question, or click 'Human Support' to message the Admin directly?";
+    return `🤔 I might need a bit more detail to give you the perfect answer! As your Unasemeje AI expert, I can help you with:
+
+• 💰 **Deposits** - Use any M-Pesa phone number, instant credit to your account
+• 🚀 **Placing orders** - API access, service pricing, and how to order
+• 📦 **Tracking orders** - Refills, delivery speeds, and order status
+• 👤 **Account management** - Profile updates and security
+
+**Quick Tip:** You can now add funds using ANY M-Pesa registered phone number. The money will be credited to YOUR account, not the phone number's owner!
+
+Could you rephrase your question, or click 'Human Support' to message the Admin directly?`;
 }
 
 app.post("/api/support-bot", auth, async (req, res) => {
@@ -1652,5 +1747,4 @@ if (!process.env.VERCEL) {
     app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA ONLINE ON PORT ${PORT}`));
 }
 
-// 🔧 FIXED: Correct export (was apAp before)
 module.exports = app;
