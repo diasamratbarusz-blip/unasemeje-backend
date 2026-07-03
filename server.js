@@ -49,6 +49,9 @@ const PAYNECTA_PAYMENT_PAGE =
     process.env.PAYNECTA_PAYMENT_PAGE ||
     "https://paynecta.co.ke/pay/unasemeje-";
 
+// 🔧 NEW: Payment code from your PayNecta link
+const PAYNECTA_PAYMENT_CODE = process.env.PAYNECTA_PAYMENT_CODE || "unasemeje-";
+
 const app = express();
 
 /**
@@ -146,6 +149,11 @@ if (!process.env.VERCEL) {
                 "Paynecta Email:",
                 ADMIN_EMAIL,
                 process.env.PAYNECTA_USER_EMAIL ? "✅ FROM ENV" : "⚠️ USING DEFAULT"
+            );
+            
+            console.log(
+                "Paynecta Payment Code:",
+                PAYNECTA_PAYMENT_CODE
             );
 
             verifyPaynecta();
@@ -454,11 +462,11 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         
         console.log(`\n[PAYMENT INITIATE] ====== NEW REQUEST ======`);
         console.log(`[PAYMENT INITIATE] Using PayNecta Email: ${ADMIN_EMAIL}`);
+        console.log(`[PAYMENT INITIATE] Using Payment Code: ${PAYNECTA_PAYMENT_CODE}`);
         console.log(`[PAYMENT INITIATE] Raw input:`, { amount, phone });
         
         // Validation
         if (!amount || !phone) {
-            console.error(`[PAYMENT INITIATE] ❌ Missing required fields`);
             return res.status(400).json({ 
                 success: false, 
                 error: "Amount and phone number are required" 
@@ -466,16 +474,13 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         }
 
         if (Number(amount) < 2) {
-            console.error(`[PAYMENT INITIATE] ❌ Amount too low: ${amount}`);
             return res.status(400).json({ 
                 success: false, 
                 error: "Minimum amount is KES 2" 
             });
         }
         
-        // Check if API key exists
         if (!process.env.PAYNECTA_API_KEY) {
-            console.error(`[PAYMENT INITIATE] ❌ PAYNECTA_API_KEY not configured`);
             return res.status(500).json({ 
                 success: false, 
                 error: "Payment service not configured. Please contact support." 
@@ -484,19 +489,15 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         
         // Format phone number
         let formatted = String(phone).replace(/\D/g, "");
-        console.log(`[PAYMENT INITIATE] Phone after removing non-digits: ${formatted}`);
         
         if (formatted.startsWith("0")) {
             formatted = "254" + formatted.substring(1);
-            console.log(`[PAYMENT INITIATE] Converted 0 to 254: ${formatted}`);
         }
         if (formatted.startsWith("7") || formatted.startsWith("1")) {
             formatted = "254" + formatted;
-            console.log(`[PAYMENT INITIATE] Added country code: ${formatted}`);
         }
         
         if (!formatted.startsWith("254") || formatted.length !== 12) {
-            console.error(`[PAYMENT INITIATE] ❌ Invalid phone format: ${formatted}`);
             return res.status(400).json({ 
                 success: false, 
                 error: "Invalid phone number format. Please use 2547XXXXXXXX" 
@@ -504,12 +505,12 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         }
 
         console.log(`[PAYMENT INITIATE] ✅ Final formatted: Amount=KES ${amount}, Phone=${formatted}`);
-        console.log(`[PAYMENT INITIATE] Sending to PayNecta with email: ${ADMIN_EMAIL}`);
 
-        // 🔧 FIXED: Try WITHOUT the "code" field (it's causing validation errors)
+        // 🔧 FIXED: Use the payment link slug as the code
         const payload = { 
-            amount: Number(amount), 
-            mobile_number: formatted
+            code: PAYNECTA_PAYMENT_CODE,
+            mobile_number: formatted,
+            amount: Number(amount)
         };
         
         console.log(`[PAYMENT INITIATE] Payload being sent:`, payload);
@@ -542,45 +543,6 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
             
             const paynectaError = error.response?.data;
             
-            // 🔧 If validation fails, try with "phone" instead of "mobile_number"
-            if (paynectaError?.code === 422) {
-                console.log(`[PAYMENT INITIATE] ⚠️ Validation error, trying alternative payload...`);
-                
-                try {
-                    const altPayload = { 
-                        amount: Number(amount), 
-                        phone: formatted
-                    };
-                    
-                    console.log(`[PAYMENT INITIATE] Trying alternative payload:`, altPayload);
-                    
-                    const altResponse = await axios.post(
-                        `${PAYNECTA_BASE_URL}/payment/initialize`,
-                        altPayload,
-                        { 
-                            headers: { 
-                                "X-API-Key": process.env.PAYNECTA_API_KEY, 
-                                "X-User-Email": ADMIN_EMAIL,
-                                "Content-Type": "application/json"
-                            },
-                            timeout: 30000
-                        }
-                    );
-                    
-                    console.log(`[PAYMENT INITIATE] ✅ Alternative payload worked!`);
-                    console.log(`[PAYMENT INITIATE] Response:`, altResponse.data);
-
-                    return res.json({ 
-                        success: true, 
-                        message: "STK push sent successfully. Check your phone for the M-Pesa prompt.",
-                        data: altResponse.data 
-                    });
-                    
-                } catch (altError) {
-                    console.error(`[PAYMENT INITIATE] ❌ Alternative also failed:`, altError.response?.data);
-                }
-            }
-            
             if (paynectaError?.error === 'USER_NOT_FOUND') {
                 return res.status(500).json({ 
                     success: false, 
@@ -589,11 +551,27 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
                 });
             }
             
-            if (paynectaError?.error === 'INVALID_API_KEY') {
+            if (paynectaError?.error === 'INVALID_API_KEY' || paynectaError?.error === 'UNAUTHORIZED') {
                 return res.status(500).json({ 
                     success: false, 
                     error: "Payment service authentication failed.",
                     details: "Please contact support."
+                });
+            }
+            
+            if (paynectaError?.error === 'FORBIDDEN') {
+                return res.status(500).json({ 
+                    success: false, 
+                    error: "Insufficient service tokens. Please contact support.",
+                    details: paynectaError.message
+                });
+            }
+            
+            if (paynectaError?.error === 'NOT_FOUND') {
+                return res.status(500).json({ 
+                    success: false, 
+                    error: "Payment link not found. Check your PAYNECTA_PAYMENT_CODE.",
+                    details: `Code used: ${PAYNECTA_PAYMENT_CODE}`
                 });
             }
             
@@ -632,6 +610,7 @@ app.get("/api/payment/test", auth, async (req, res) => {
     try {
         console.log(`[PAYMENT TEST] Testing PayNecta connection...`);
         console.log(`[PAYMENT TEST] Using email: ${ADMIN_EMAIL}`);
+        console.log(`[PAYMENT TEST] Payment code: ${PAYNECTA_PAYMENT_CODE}`);
         console.log(`[PAYMENT TEST] API Key exists: ${!!process.env.PAYNECTA_API_KEY}`);
         
         if (!process.env.PAYNECTA_API_KEY) {
@@ -641,7 +620,8 @@ app.get("/api/payment/test", auth, async (req, res) => {
                 checks: {
                     apiKey: false,
                     connection: false,
-                    email: ADMIN_EMAIL
+                    email: ADMIN_EMAIL,
+                    paymentCode: PAYNECTA_PAYMENT_CODE
                 }
             });
         }
@@ -663,6 +643,7 @@ app.get("/api/payment/test", auth, async (req, res) => {
                 apiKey: true,
                 connection: true,
                 email: ADMIN_EMAIL,
+                paymentCode: PAYNECTA_PAYMENT_CODE,
                 paynectaEmail: response.data?.data?.email || "Unknown"
             }
         });
@@ -677,7 +658,8 @@ app.get("/api/payment/test", auth, async (req, res) => {
             checks: {
                 apiKey: !!process.env.PAYNECTA_API_KEY,
                 connection: false,
-                email: ADMIN_EMAIL
+                email: ADMIN_EMAIL,
+                paymentCode: PAYNECTA_PAYMENT_CODE
             }
         });
     }
@@ -692,9 +674,12 @@ app.post("/api/paynecta/stkpush", auth, async (req, res) => {
         if (formatted.startsWith("0")) formatted = "254" + formatted.substring(1);
         if (formatted.startsWith("7") || formatted.startsWith("1")) formatted = "254" + formatted;
 
-        // 🔧 FIXED: Removed code: "600"
         const response = await axios.post(`${PAYNECTA_BASE_URL}/payment/initialize`, 
-            { amount: Number(amount), mobile_number: formatted },
+            { 
+                code: PAYNECTA_PAYMENT_CODE,
+                amount: Number(amount), 
+                mobile_number: formatted 
+            },
             { headers: { "X-API-Key": process.env.PAYNECTA_API_KEY, "X-User-Email": ADMIN_EMAIL }}
         );
         res.json({ success: true, data: response.data });
@@ -1667,5 +1652,5 @@ if (!process.env.VERCEL) {
     app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA ONLINE ON PORT ${PORT}`));
 }
 
-// 🔧 FIXED: Changed from apAp to app
+// 🔧 FIXED: Correct export (was apAp before)
 module.exports = app;
