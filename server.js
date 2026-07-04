@@ -1174,6 +1174,224 @@ app.get("/api/settings", async (req, res) => {
 
 /**
  * =========================================
+ * 🎵 AUDIO/SOUND MANAGEMENT ENDPOINTS
+ * Admin can control all sounds from admin panel
+ * =========================================
+ */
+
+// Get public audio settings (for frontend)
+app.get("/api/audio/settings", async (req, res) => {
+    try {
+        const settings = await Setting.find({ 
+            key: { $in: [
+                'bg_music_enabled', 
+                'bg_music_url', 
+                'bg_music_volume',
+                'welcome_voice_enabled',
+                'welcome_voice_url',
+                'success_sound_enabled',
+                'success_sound_url',
+                'notification_sound_enabled',
+                'notification_sound_url',
+                'login_sound_enabled',
+                'login_sound_url'
+            ]}
+        });
+        
+        const audioConfig = {
+            bgMusic: {
+                enabled: settings.find(s => s.key === 'bg_music_enabled')?.value ?? true,
+                url: settings.find(s => s.key === 'bg_music_url')?.value ?? '/sounds/background.mp3',
+                volume: settings.find(s => s.key === 'bg_music_volume')?.value ?? 0.3
+            },
+            welcomeVoice: {
+                enabled: settings.find(s => s.key === 'welcome_voice_enabled')?.value ?? false,
+                url: settings.find(s => s.key === 'welcome_voice_url')?.value ?? '/sounds/welcome-broadcast.mp3'
+            },
+            successSound: {
+                enabled: settings.find(s => s.key === 'success_sound_enabled')?.value ?? true,
+                url: settings.find(s => s.key === 'success_sound_url')?.value ?? '/sounds/success.mp3'
+            },
+            notificationSound: {
+                enabled: settings.find(s => s.key === 'notification_sound_enabled')?.value ?? true,
+                url: settings.find(s => s.key === 'notification_sound_url')?.value ?? '/sounds/notification.mp3'
+            },
+            loginSound: {
+                enabled: settings.find(s => s.key === 'login_sound_enabled')?.value ?? true,
+                url: settings.find(s => s.key === 'login_sound_url')?.value ?? '/sounds/login.mp3'
+            }
+        };
+        
+        res.json({ success: true, data: audioConfig });
+    } catch (err) {
+        console.error('Audio settings fetch error:', err);
+        res.status(500).json({ error: 'Failed to fetch audio settings' });
+    }
+});
+
+// Admin: Update audio settings
+app.post("/api/admin/audio/settings", adminAuth, async (req, res) => {
+    try {
+        const { 
+            bgMusicEnabled, bgMusicUrl, bgMusicVolume,
+            welcomeVoiceEnabled, welcomeVoiceUrl,
+            successSoundEnabled, successSoundUrl,
+            notificationSoundEnabled, notificationSoundUrl,
+            loginSoundEnabled, loginSoundUrl
+        } = req.body;
+
+        const updates = [];
+
+        if (bgMusicEnabled !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'bg_music_enabled' },
+                { value: bgMusicEnabled },
+                { upsert: true, new: true }
+            ));
+        }
+
+        if (bgMusicUrl !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'bg_music_url' },
+                { value: bgMusicUrl },
+                { upsert: true, new: true }
+            ));
+        }
+
+        if (bgMusicVolume !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'bg_music_volume' },
+                { value: bgMusicVolume },
+                { upsert: true, new: true }
+            ));
+        }
+
+        if (welcomeVoiceEnabled !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'welcome_voice_enabled' },
+                { value: welcomeVoiceEnabled },
+                { upsert: true, new: true }
+            ));
+        }
+
+        if (welcomeVoiceUrl !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'welcome_voice_url' },
+                { value: welcomeVoiceUrl },
+                { upsert: true, new: true }
+            ));
+        }
+
+        if (successSoundEnabled !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'success_sound_enabled' },
+                { value: successSoundEnabled },
+                { upsert: true, new: true }
+            ));
+        }
+
+        if (successSoundUrl !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'success_sound_url' },
+                { value: successSoundUrl },
+                { upsert: true, new: true }
+            ));
+        }
+
+        if (notificationSoundEnabled !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'notification_sound_enabled' },
+                { value: notificationSoundEnabled },
+                { upsert: true, new: true }
+            ));
+        }
+
+        if (notificationSoundUrl !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'notification_sound_url' },
+                { value: notificationSoundUrl },
+                { upsert: true, new: true }
+            ));
+        }
+
+        if (loginSoundEnabled !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'login_sound_enabled' },
+                { value: loginSoundEnabled },
+                { upsert: true, new: true }
+            ));
+        }
+
+        if (loginSoundUrl !== undefined) {
+            updates.push(Setting.findOneAndUpdate(
+                { key: 'login_sound_url' },
+                { value: loginSoundUrl },
+                { upsert: true, new: true }
+            ));
+        }
+
+        await Promise.all(updates);
+        
+        log(`ADMIN UPDATED AUDIO SETTINGS`);
+        res.json({ success: true, message: 'Audio settings updated successfully' });
+    } catch (err) {
+        console.error('Audio settings update error:', err);
+        res.status(500).json({ error: 'Failed to update audio settings' });
+    }
+});
+
+// Admin: Get all audio settings
+app.get("/api/admin/audio/settings", adminAuth, async (req, res) => {
+    try {
+        const settings = await Setting.find({ 
+            key: { $in: [
+                'bg_music_enabled', 
+                'bg_music_url', 
+                'bg_music_volume',
+                'welcome_voice_enabled',
+                'welcome_voice_url',
+                'success_sound_enabled',
+                'success_sound_url',
+                'notification_sound_enabled',
+                'notification_sound_url',
+                'login_sound_enabled',
+                'login_sound_url'
+            ]}
+        });
+        
+        const audioConfig = {
+            bgMusic: {
+                enabled: settings.find(s => s.key === 'bg_music_enabled')?.value ?? true,
+                url: settings.find(s => s.key === 'bg_music_url')?.value ?? '/sounds/background.mp3',
+                volume: settings.find(s => s.key === 'bg_music_volume')?.value ?? 0.3
+            },
+            welcomeVoice: {
+                enabled: settings.find(s => s.key === 'welcome_voice_enabled')?.value ?? false,
+                url: settings.find(s => s.key === 'welcome_voice_url')?.value ?? '/sounds/welcome-broadcast.mp3'
+            },
+            successSound: {
+                enabled: settings.find(s => s.key === 'success_sound_enabled')?.value ?? true,
+                url: settings.find(s => s.key === 'success_sound_url')?.value ?? '/sounds/success.mp3'
+            },
+            notificationSound: {
+                enabled: settings.find(s => s.key === 'notification_sound_enabled')?.value ?? true,
+                url: settings.find(s => s.key === 'notification_sound_url')?.value ?? '/sounds/notification.mp3'
+            },
+            loginSound: {
+                enabled: settings.find(s => s.key === 'login_sound_enabled')?.value ?? true,
+                url: settings.find(s => s.key === 'login_sound_url')?.value ?? '/sounds/login.mp3'
+            }
+        };
+        
+        res.json({ success: true, data: audioConfig });
+    } catch (err) {
+        console.error('Admin audio settings fetch error:', err);
+        res.status(500).json({ error: 'Failed to fetch audio settings' });
+    }
+});
+
+/**
+ * =========================================
  * HUMAN SUPPORT TICKET SYSTEM
  * =========================================
  */
