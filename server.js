@@ -6,8 +6,10 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const path = require("path");
+const fs = require("fs"); // 📁 NEW: Required for deleting old audio files
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const multer = require("multer"); // 📁 NEW: Required for handling file uploads
 
 const connectDB = require("./config/db");
 const log = require("./utils/logger");
@@ -93,8 +95,8 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '50mb' })); // Increased limit for safety
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.static(path.join(__dirname, "public")));
 
 app.use(paynectaInitializeRoutes);
@@ -314,6 +316,8 @@ const handlePaynectaWebhook = async (req, res) => {
             console.log(`[WEBHOOK] Transaction Ref: ${transactionRef}`);
             console.log(`[WEBHOOK] Amount: KES ${amount}, Phone: ${phone}`);
 
+            // 🔒 STEP 1: Find the pending deposit by transaction reference
+            // This ensures we credit the user who INITIATED the payment
             const pendingDeposit = await Deposit.findOne({
                 $or: [
                     { transactionCode: transactionRef },
@@ -330,11 +334,13 @@ const handlePaynectaWebhook = async (req, res) => {
 
             console.log(`[WEBHOOK] ✅ Found pending deposit:`, pendingDeposit);
 
+            // 🔒 STEP 2: Verify amount matches (security check)
             if (Math.abs(pendingDeposit.amount - amount) > 0.01) {
                 console.log(`[WEBHOOK] ❌ Amount mismatch! Expected: ${pendingDeposit.amount}, Received: ${amount}`);
                 return res.status(400).send("Amount mismatch");
             }
 
+            // 🔒 STEP 3: Credit the user who INITIATED the payment
             const user = await User.findById(pendingDeposit.userId);
             
             if (!user) {
@@ -342,9 +348,11 @@ const handlePaynectaWebhook = async (req, res) => {
                 return res.status(404).send("User not found");
             }
 
+            // Update user balance
             user.balance += amount;
             await user.save();
 
+            // Update deposit status
             pendingDeposit.status = "completed";
             pendingDeposit.message = `Payment completed via PayNecta webhook. Transaction: ${transactionRef}`;
             await pendingDeposit.save();
@@ -461,6 +469,9 @@ app.get("/api/paynecta/verify", auth, async (req, res) => {
 /**
  * =========================================
  * 🔧 FIXED: PAYMENT INITIATION ENDPOINT (STK PUSH)
+ * - Does NOT save phone number permanently to user account
+ * - Creates pending deposit record linked to authenticated user
+ * - Phone number is only stored in deposit record for tracking
  * =========================================
  */
 app.post("/api/payment/initiate", auth, async (req, res) => {
@@ -473,18 +484,29 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         console.log(`[PAYMENT INITIATE] Using Payment Code: ${PAYNECTA_PAYMENT_CODE}`);
         console.log(`[PAYMENT INITIATE] Raw input:`, { amount, phone });
         
+        // Validation
         if (!amount || !phone) {
-            return res.status(400).json({ success: false, error: "Amount and phone number are required" });
+            return res.status(400).json({ 
+                success: false, 
+                error: "Amount and phone number are required" 
+            });
         }
 
         if (Number(amount) < 2) {
-            return res.status(400).json({ success: false, error: "Minimum amount is KES 2" });
+            return res.status(400).json({ 
+                success: false, 
+                error: "Minimum amount is KES 2" 
+            });
         }
         
         if (!process.env.PAYNECTA_API_KEY) {
-            return res.status(500).json({ success: false, error: "Payment service not configured. Please contact support." });
+            return res.status(500).json({ 
+                success: false, 
+                error: "Payment service not configured. Please contact support." 
+            });
         }
         
+        // Format phone number
         let formatted = String(phone).replace(/\D/g, "");
         
         if (formatted.startsWith("0")) {
@@ -495,16 +517,27 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         }
         
         if (!formatted.startsWith("254") || formatted.length !== 12) {
-            return res.status(400).json({ success: false, error: "Invalid phone number format. Please use 2547XXXXXXXX" });
+            return res.status(400).json({ 
+                success: false, 
+                error: "Invalid phone number format. Please use 2547XXXXXXXX" 
+            });
         }
 
         console.log(`[PAYMENT INITIATE] ✅ Final formatted: Amount=KES ${amount}, Phone=${formatted}`);
 
+        // 🔒 Get authenticated user
         const user = await User.findById(req.user.id);
         if (!user) {
-            return res.status(404).json({ success: false, error: "User not found" });
+            return res.status(404).json({ 
+                success: false, 
+                error: "User not found" 
+            });
         }
 
+        // 🔧 NOTE: Phone number is NOT saved to user's account
+        // It's only stored in the deposit record for tracking purposes
+
+        // 🔧 Call PayNecta API
         const payload = { 
             code: PAYNECTA_PAYMENT_CODE,
             mobile_number: formatted,
@@ -529,19 +562,20 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         console.log(`[PAYMENT INITIATE] ✅ Success!`);
         console.log(`[PAYMENT INITIATE] Response:`, response.data);
 
+        // 🔒 Create pending deposit record linked to THIS user
         const transactionRef = response.data?.data?.transaction_reference || 
                               response.data?.data?.CheckoutRequestID || 
                               `TRX-${Date.now()}`;
 
         await Deposit.create({
-            userId: req.user.id,
+            userId: req.user.id,  // 🔒 CRITICAL: Link to authenticated user
             userEmail: user.email,
-            phone: formatted,
+            phone: formatted,  // 🔒 Phone stored here for tracking only
             amount: Number(amount),
             transactionCode: transactionRef,
             code: transactionRef,
             source: "stk",
-            status: "pending",
+            status: "pending",  // Will be updated to "completed" by webhook
             message: `STK Push initiated for KES ${amount} from ${formatted}`
         });
 
@@ -592,7 +626,10 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         }
         
         if (error.code === 'ECONNABORTED') {
-            return res.status(504).json({ success: false, error: "Payment request timed out. Please try again." });
+            return res.status(504).json({ 
+                success: false, 
+                error: "Payment request timed out. Please try again."
+            });
         }
         
         return res.status(500).json({ 
@@ -778,7 +815,8 @@ app.post("/api/login", async (req, res) => {
             { expiresIn: "7d" }
         );
         
-        res.json({ token, balance: user.balance });
+        // 🎵 NEW: Send isNewLogin flag so frontend knows to play the Welcome Voice
+        res.json({ token, balance: user.balance, isNewLogin: true });
     } catch (err) {
         console.error("Login error:", err);
         res.status(500).json({ error: "Login failed" });
@@ -1305,6 +1343,107 @@ app.get("/api/admin/audio/settings", async (req, res) => {
 
 /**
  * =========================================
+ * 📁 NEW: AUDIO FILE UPLOAD & DELETE ENDPOINTS
+ * =========================================
+ */
+const audioStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        const dir = path.join(__dirname, 'public', 'sounds');
+        // Create the directory if it doesn't exist
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir); 
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, 'audio-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+const uploadAudio = multer({ 
+    storage: audioStorage,
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith('audio/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Not an audio file! Please upload an MP3 or WAV file.'), false);
+        }
+    },
+    limits: { fileSize: 20 * 1024 * 1024 } // 20MB max file size
+});
+
+// Upload Audio File (Replaces old file automatically)
+app.post("/api/admin/audio/upload", uploadAudio.single('audioFile'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, error: "No file uploaded or invalid file type." });
+        }
+        
+        const audioType = req.body.audioType; // e.g., 'bgMusic', 'welcomeVoice'
+        const fileUrl = `/sounds/${req.file.filename}`;
+        
+        // 🗑️ Delete old file from server if it exists to save space
+        const oldSetting = await Setting.findOne({ key: `${audioType}_url` });
+        if (oldSetting && oldSetting.value && oldSetting.value.startsWith('/sounds/')) {
+            const oldFileName = oldSetting.value.replace('/sounds/', '');
+            const oldFilePath = path.join(__dirname, 'public', 'sounds', oldFileName);
+            if (fs.existsSync(oldFilePath)) {
+                fs.unlinkSync(oldFilePath);
+                console.log(`🗑️ Deleted old audio file: ${oldFileName}`);
+            }
+        }
+        
+        await Setting.findOneAndUpdate(
+            { key: `${audioType}_url` },
+            { value: fileUrl },
+            { upsert: true, new: true }
+        );
+        
+        log(`ADMIN UPLOADED AUDIO: ${audioType} -> ${fileUrl}`);
+        res.json({ success: true, url: fileUrl, message: "Audio uploaded successfully!" });
+    } catch (err) {
+        console.error("Audio upload error:", err);
+        res.status(500).json({ success: false, error: "Failed to upload audio file." });
+    }
+});
+
+// Delete Audio File
+app.post("/api/admin/audio/delete", async (req, res) => {
+    try {
+        const { audioType } = req.body;
+        const defaultUrls = {
+            bgMusic: '/sounds/background.mp3', 
+            welcomeVoice: '/sounds/welcome-broadcast.mp3',
+            successSound: '/sounds/success.mp3', 
+            notificationSound: '/sounds/notification.mp3', 
+            loginSound: '/sounds/login.mp3'
+        };
+        
+        const setting = await Setting.findOne({ key: `${audioType}_url` });
+        if (setting && setting.value && setting.value.startsWith('/sounds/')) {
+            const fileName = setting.value.replace('/sounds/', '');
+            const filePath = path.join(__dirname, 'public', 'sounds', fileName);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+                console.log(`🗑️ Deleted audio file: ${fileName}`);
+            }
+        }
+        
+        await Setting.findOneAndUpdate(
+            { key: `${audioType}_url` },
+            { value: defaultUrls[audioType] || '' },
+            { upsert: true, new: true }
+        );
+        
+        log(`ADMIN DELETED AUDIO: ${audioType}`);
+        res.json({ success: true, message: "Audio file deleted successfully." });
+    } catch (err) {
+        console.error("Audio delete error:", err);
+        res.status(500).json({ success: false, error: "Failed to delete audio file." });
+    }
+});
+
+/**
+ * =========================================
  * HUMAN SUPPORT TICKET SYSTEM
  * =========================================
  */
@@ -1529,6 +1668,10 @@ try {
 /**
  * =========================================
  * 🔧 UPDATED: AI ENGINE WITH NEW PAYMENT KNOWLEDGE
+ * - Phone numbers used for deposits are NOT saved permanently
+ * - Deposits are credited to the account that initiated the payment
+ * - Any M-Pesa registered phone can be used for deposits
+ * - System uses transaction references to track payments
  * =========================================
  */
 async function processInternalAI(message, context = {}) {
@@ -1536,6 +1679,7 @@ async function processInternalAI(message, context = {}) {
     const rawMessage = message.trim();
     const recentLogs = context.recentLogs || [];
 
+    // 🚨 CONTEXT-AWARE HANDLING
     if (context.userId && recentLogs.length > 0) {
         const lastLog = recentLogs[0];
         const lastAiReply = lastLog.aiReply.toLowerCase();
@@ -1543,17 +1687,22 @@ async function processInternalAI(message, context = {}) {
         const phoneRegex = /^(07|01|\+254|2547|2541)\d{8,9}$/;
         const isPhoneNumber = phoneRegex.test(rawMessage.replace(/\s/g, ''));
 
+        // SCENARIO 1: PAYMENT CHECK
         if (isPhoneNumber && (lastAiReply.includes("payment") || lastAiReply.includes("wallet") || lastAiReply.includes("credited") || lastAiReply.includes("check our system") || lastAiReply.includes("money") || lastAiReply.includes("send me the exact phone"))) {
             try {
                 const cleanPhone = rawMessage.replace(/\s/g, '');
                 
+                // 🔧 UPDATED: Check for pending deposits with this phone number
+                // The deposit record contains the phone number used for that specific transaction
                 const pendingDeposit = await Deposit.findOne({ 
                     phone: cleanPhone, 
                     status: 'pending' 
                 }).sort({ createdAt: -1 });
                 
                 if (pendingDeposit) {
+                    // Found a pending deposit - check if it belongs to current user
                     if (pendingDeposit.userId.toString() === context.userId.toString()) {
+                        // Auto-approve and credit the wallet
                         const user = await User.findById(context.userId);
                         user.balance += pendingDeposit.amount;
                         pendingDeposit.status = 'completed';
@@ -1562,9 +1711,11 @@ async function processInternalAI(message, context = {}) {
                         await pendingDeposit.save();
                         return `✅ Great news! I found your pending payment of KES ${pendingDeposit.amount} and have added the money to your wallet immediately. Your new balance is KES ${user.balance.toLocaleString()}.`;
                     } else {
+                        // This phone was used by another account - don't credit
                         return `⚠️ I found a pending payment from ${cleanPhone}, but it belongs to a different account. Please login to the account that initiated this payment to check it.`;
                     }
                 } else {
+                    // Check if it's already completed
                     const anyPayment = await Deposit.findOne({ 
                         phone: cleanPhone,
                         userId: context.userId
@@ -1581,6 +1732,7 @@ async function processInternalAI(message, context = {}) {
             }
         } 
         
+        // SCENARIO 2: PROFILE UPDATE - PHONE
         else if (isPhoneNumber && (lastAiReply.includes("profile") || lastAiReply.includes("update") || lastAiReply.includes("register") || lastAiReply.includes("funding number") || lastAiReply.includes("save it to your profile") || lastAiReply.includes("what you want to change"))) {
             try {
                 const cleanPhone = rawMessage.replace(/\s/g, '');
@@ -1616,6 +1768,7 @@ async function processInternalAI(message, context = {}) {
             }
         }
 
+        // SCENARIO 3: PROFILE UPDATE - NAME
         else if (!isPhoneNumber && (lastAiReply.includes("what you want to change") || lastAiReply.includes("update some of your account details"))) {
             try {
                 const newName = rawMessage;
@@ -1628,6 +1781,9 @@ async function processInternalAI(message, context = {}) {
         }
     }
 
+    // ==========================================
+    // STANDARD FUZZY MATCHING
+    // ==========================================
     let bestMatch = null;
     let highestScore = 0;
 
@@ -1661,9 +1817,11 @@ async function processInternalAI(message, context = {}) {
         }
     }
 
+    // 🔧 UPDATED: Enhanced payment-related responses
     if (bestMatch && highestScore >= 5) {
         let finalAnswer = bestMatch.answer;
         
+        // 🔧 NEW: Override payment-related answers with updated information
         if (cleanMessage.includes("deposit") || cleanMessage.includes("add money") || cleanMessage.includes("fund") || cleanMessage.includes("payment")) {
             finalAnswer = `💰 **How to Add Funds to Your Wallet:**
 
