@@ -11,9 +11,6 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const multer = require("multer"); // 📁 NEW: Required for handling file uploads
 
-const connectDB = require("./config/db");
-const log = require("./utils/logger");
-
 // ================= ROUTES =================
 const paynectaInitializeRoutes = require("./api/paynecta/initialize/routes");
 
@@ -95,8 +92,8 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(express.json({ limit: '50mb' })); // Increased limit for safety
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.static(path.join(__dirname, "public")));
 
 app.use(paynectaInitializeRoutes);
@@ -815,8 +812,7 @@ app.post("/api/login", async (req, res) => {
             { expiresIn: "7d" }
         );
         
-        // 🎵 NEW: Send isNewLogin flag so frontend knows to play the Welcome Voice
-        res.json({ token, balance: user.balance, isNewLogin: true });
+        res.json({ token, balance: user.balance });
     } catch (err) {
         console.error("Login error:", err);
         res.status(500).json({ error: "Login failed" });
@@ -1371,7 +1367,7 @@ const uploadAudio = multer({
     limits: { fileSize: 20 * 1024 * 1024 } // 20MB max file size
 });
 
-// Upload Audio File (Replaces old file automatically)
+// 📁 Upload Audio File (Replaces old file automatically)
 app.post("/api/admin/audio/upload", uploadAudio.single('audioFile'), async (req, res) => {
     try {
         if (!req.file) {
@@ -1406,7 +1402,7 @@ app.post("/api/admin/audio/upload", uploadAudio.single('audioFile'), async (req,
     }
 });
 
-// Delete Audio File
+// 🗑️ Delete Audio File
 app.post("/api/admin/audio/delete", async (req, res) => {
     try {
         const { audioType } = req.body;
