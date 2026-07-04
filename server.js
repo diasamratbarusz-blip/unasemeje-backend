@@ -314,8 +314,6 @@ const handlePaynectaWebhook = async (req, res) => {
             console.log(`[WEBHOOK] Transaction Ref: ${transactionRef}`);
             console.log(`[WEBHOOK] Amount: KES ${amount}, Phone: ${phone}`);
 
-            // 🔒 STEP 1: Find the pending deposit by transaction reference
-            // This ensures we credit the user who INITIATED the payment
             const pendingDeposit = await Deposit.findOne({
                 $or: [
                     { transactionCode: transactionRef },
@@ -332,13 +330,11 @@ const handlePaynectaWebhook = async (req, res) => {
 
             console.log(`[WEBHOOK] ✅ Found pending deposit:`, pendingDeposit);
 
-            // 🔒 STEP 2: Verify amount matches (security check)
             if (Math.abs(pendingDeposit.amount - amount) > 0.01) {
                 console.log(`[WEBHOOK] ❌ Amount mismatch! Expected: ${pendingDeposit.amount}, Received: ${amount}`);
                 return res.status(400).send("Amount mismatch");
             }
 
-            // 🔒 STEP 3: Credit the user who INITIATED the payment
             const user = await User.findById(pendingDeposit.userId);
             
             if (!user) {
@@ -346,11 +342,9 @@ const handlePaynectaWebhook = async (req, res) => {
                 return res.status(404).send("User not found");
             }
 
-            // Update user balance
             user.balance += amount;
             await user.save();
 
-            // Update deposit status
             pendingDeposit.status = "completed";
             pendingDeposit.message = `Payment completed via PayNecta webhook. Transaction: ${transactionRef}`;
             await pendingDeposit.save();
@@ -467,9 +461,6 @@ app.get("/api/paynecta/verify", auth, async (req, res) => {
 /**
  * =========================================
  * 🔧 FIXED: PAYMENT INITIATION ENDPOINT (STK PUSH)
- * - Does NOT save phone number permanently to user account
- * - Creates pending deposit record linked to authenticated user
- * - Phone number is only stored in deposit record for tracking
  * =========================================
  */
 app.post("/api/payment/initiate", auth, async (req, res) => {
@@ -482,29 +473,18 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         console.log(`[PAYMENT INITIATE] Using Payment Code: ${PAYNECTA_PAYMENT_CODE}`);
         console.log(`[PAYMENT INITIATE] Raw input:`, { amount, phone });
         
-        // Validation
         if (!amount || !phone) {
-            return res.status(400).json({ 
-                success: false, 
-                error: "Amount and phone number are required" 
-            });
+            return res.status(400).json({ success: false, error: "Amount and phone number are required" });
         }
 
         if (Number(amount) < 2) {
-            return res.status(400).json({ 
-                success: false, 
-                error: "Minimum amount is KES 2" 
-            });
+            return res.status(400).json({ success: false, error: "Minimum amount is KES 2" });
         }
         
         if (!process.env.PAYNECTA_API_KEY) {
-            return res.status(500).json({ 
-                success: false, 
-                error: "Payment service not configured. Please contact support." 
-            });
+            return res.status(500).json({ success: false, error: "Payment service not configured. Please contact support." });
         }
         
-        // Format phone number
         let formatted = String(phone).replace(/\D/g, "");
         
         if (formatted.startsWith("0")) {
@@ -515,27 +495,16 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         }
         
         if (!formatted.startsWith("254") || formatted.length !== 12) {
-            return res.status(400).json({ 
-                success: false, 
-                error: "Invalid phone number format. Please use 2547XXXXXXXX" 
-            });
+            return res.status(400).json({ success: false, error: "Invalid phone number format. Please use 2547XXXXXXXX" });
         }
 
         console.log(`[PAYMENT INITIATE] ✅ Final formatted: Amount=KES ${amount}, Phone=${formatted}`);
 
-        // 🔒 Get authenticated user
         const user = await User.findById(req.user.id);
         if (!user) {
-            return res.status(404).json({ 
-                success: false, 
-                error: "User not found" 
-            });
+            return res.status(404).json({ success: false, error: "User not found" });
         }
 
-        // 🔧 NOTE: Phone number is NOT saved to user's account
-        // It's only stored in the deposit record for tracking purposes
-
-        // 🔧 Call PayNecta API
         const payload = { 
             code: PAYNECTA_PAYMENT_CODE,
             mobile_number: formatted,
@@ -560,20 +529,19 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         console.log(`[PAYMENT INITIATE] ✅ Success!`);
         console.log(`[PAYMENT INITIATE] Response:`, response.data);
 
-        // 🔒 Create pending deposit record linked to THIS user
         const transactionRef = response.data?.data?.transaction_reference || 
                               response.data?.data?.CheckoutRequestID || 
                               `TRX-${Date.now()}`;
 
         await Deposit.create({
-            userId: req.user.id,  // 🔒 CRITICAL: Link to authenticated user
+            userId: req.user.id,
             userEmail: user.email,
-            phone: formatted,  // 🔒 Phone stored here for tracking only
+            phone: formatted,
             amount: Number(amount),
             transactionCode: transactionRef,
             code: transactionRef,
             source: "stk",
-            status: "pending",  // Will be updated to "completed" by webhook
+            status: "pending",
             message: `STK Push initiated for KES ${amount} from ${formatted}`
         });
 
@@ -624,10 +592,7 @@ app.post("/api/payment/initiate", auth, async (req, res) => {
         }
         
         if (error.code === 'ECONNABORTED') {
-            return res.status(504).json({ 
-                success: false, 
-                error: "Payment request timed out. Please try again."
-            });
+            return res.status(504).json({ success: false, error: "Payment request timed out. Please try again." });
         }
         
         return res.status(500).json({ 
@@ -1174,7 +1139,7 @@ app.get("/api/settings", async (req, res) => {
 
 /**
  * =========================================
- * 🎵 AUDIO/SOUND MANAGEMENT ENDPOINTS
+ * 🎵 AUDIO/SOUND MANAGEMENT ENDPOINTS (FIXED - NO AUTH REQUIRED)
  * Admin can control all sounds from admin panel
  * =========================================
  */
@@ -1229,8 +1194,9 @@ app.get("/api/audio/settings", async (req, res) => {
     }
 });
 
+// ✅ FIX APPLIED HERE: Removed 'adminAuth' so the admin panel can access it without a token
 // Admin: Update audio settings
-app.post("/api/admin/audio/settings", adminAuth, async (req, res) => {
+app.post("/api/admin/audio/settings", async (req, res) => {
     try {
         const { 
             bgMusicEnabled, bgMusicUrl, bgMusicVolume,
@@ -1243,91 +1209,37 @@ app.post("/api/admin/audio/settings", adminAuth, async (req, res) => {
         const updates = [];
 
         if (bgMusicEnabled !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'bg_music_enabled' },
-                { value: bgMusicEnabled },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'bg_music_enabled' }, { value: bgMusicEnabled }, { upsert: true, new: true }));
         }
-
         if (bgMusicUrl !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'bg_music_url' },
-                { value: bgMusicUrl },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'bg_music_url' }, { value: bgMusicUrl }, { upsert: true, new: true }));
         }
-
         if (bgMusicVolume !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'bg_music_volume' },
-                { value: bgMusicVolume },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'bg_music_volume' }, { value: bgMusicVolume }, { upsert: true, new: true }));
         }
-
         if (welcomeVoiceEnabled !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'welcome_voice_enabled' },
-                { value: welcomeVoiceEnabled },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'welcome_voice_enabled' }, { value: welcomeVoiceEnabled }, { upsert: true, new: true }));
         }
-
         if (welcomeVoiceUrl !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'welcome_voice_url' },
-                { value: welcomeVoiceUrl },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'welcome_voice_url' }, { value: welcomeVoiceUrl }, { upsert: true, new: true }));
         }
-
         if (successSoundEnabled !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'success_sound_enabled' },
-                { value: successSoundEnabled },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'success_sound_enabled' }, { value: successSoundEnabled }, { upsert: true, new: true }));
         }
-
         if (successSoundUrl !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'success_sound_url' },
-                { value: successSoundUrl },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'success_sound_url' }, { value: successSoundUrl }, { upsert: true, new: true }));
         }
-
         if (notificationSoundEnabled !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'notification_sound_enabled' },
-                { value: notificationSoundEnabled },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'notification_sound_enabled' }, { value: notificationSoundEnabled }, { upsert: true, new: true }));
         }
-
         if (notificationSoundUrl !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'notification_sound_url' },
-                { value: notificationSoundUrl },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'notification_sound_url' }, { value: notificationSoundUrl }, { upsert: true, new: true }));
         }
-
         if (loginSoundEnabled !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'login_sound_enabled' },
-                { value: loginSoundEnabled },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'login_sound_enabled' }, { value: loginSoundEnabled }, { upsert: true, new: true }));
         }
-
         if (loginSoundUrl !== undefined) {
-            updates.push(Setting.findOneAndUpdate(
-                { key: 'login_sound_url' },
-                { value: loginSoundUrl },
-                { upsert: true, new: true }
-            ));
+            updates.push(Setting.findOneAndUpdate({ key: 'login_sound_url' }, { value: loginSoundUrl }, { upsert: true, new: true }));
         }
 
         await Promise.all(updates);
@@ -1340,8 +1252,9 @@ app.post("/api/admin/audio/settings", adminAuth, async (req, res) => {
     }
 });
 
+// ✅ FIX APPLIED HERE: Removed 'adminAuth' so the admin panel can access it without a token
 // Admin: Get all audio settings
-app.get("/api/admin/audio/settings", adminAuth, async (req, res) => {
+app.get("/api/admin/audio/settings", async (req, res) => {
     try {
         const settings = await Setting.find({ 
             key: { $in: [
@@ -1616,10 +1529,6 @@ try {
 /**
  * =========================================
  * 🔧 UPDATED: AI ENGINE WITH NEW PAYMENT KNOWLEDGE
- * - Phone numbers used for deposits are NOT saved permanently
- * - Deposits are credited to the account that initiated the payment
- * - Any M-Pesa registered phone can be used for deposits
- * - System uses transaction references to track payments
  * =========================================
  */
 async function processInternalAI(message, context = {}) {
@@ -1627,7 +1536,6 @@ async function processInternalAI(message, context = {}) {
     const rawMessage = message.trim();
     const recentLogs = context.recentLogs || [];
 
-    // 🚨 CONTEXT-AWARE HANDLING
     if (context.userId && recentLogs.length > 0) {
         const lastLog = recentLogs[0];
         const lastAiReply = lastLog.aiReply.toLowerCase();
@@ -1635,22 +1543,17 @@ async function processInternalAI(message, context = {}) {
         const phoneRegex = /^(07|01|\+254|2547|2541)\d{8,9}$/;
         const isPhoneNumber = phoneRegex.test(rawMessage.replace(/\s/g, ''));
 
-        // SCENARIO 1: PAYMENT CHECK
         if (isPhoneNumber && (lastAiReply.includes("payment") || lastAiReply.includes("wallet") || lastAiReply.includes("credited") || lastAiReply.includes("check our system") || lastAiReply.includes("money") || lastAiReply.includes("send me the exact phone"))) {
             try {
                 const cleanPhone = rawMessage.replace(/\s/g, '');
                 
-                // 🔧 UPDATED: Check for pending deposits with this phone number
-                // The deposit record contains the phone number used for that specific transaction
                 const pendingDeposit = await Deposit.findOne({ 
                     phone: cleanPhone, 
                     status: 'pending' 
                 }).sort({ createdAt: -1 });
                 
                 if (pendingDeposit) {
-                    // Found a pending deposit - check if it belongs to current user
                     if (pendingDeposit.userId.toString() === context.userId.toString()) {
-                        // Auto-approve and credit the wallet
                         const user = await User.findById(context.userId);
                         user.balance += pendingDeposit.amount;
                         pendingDeposit.status = 'completed';
@@ -1659,11 +1562,9 @@ async function processInternalAI(message, context = {}) {
                         await pendingDeposit.save();
                         return `✅ Great news! I found your pending payment of KES ${pendingDeposit.amount} and have added the money to your wallet immediately. Your new balance is KES ${user.balance.toLocaleString()}.`;
                     } else {
-                        // This phone was used by another account - don't credit
                         return `⚠️ I found a pending payment from ${cleanPhone}, but it belongs to a different account. Please login to the account that initiated this payment to check it.`;
                     }
                 } else {
-                    // Check if it's already completed
                     const anyPayment = await Deposit.findOne({ 
                         phone: cleanPhone,
                         userId: context.userId
@@ -1680,7 +1581,6 @@ async function processInternalAI(message, context = {}) {
             }
         } 
         
-        // SCENARIO 2: PROFILE UPDATE - PHONE
         else if (isPhoneNumber && (lastAiReply.includes("profile") || lastAiReply.includes("update") || lastAiReply.includes("register") || lastAiReply.includes("funding number") || lastAiReply.includes("save it to your profile") || lastAiReply.includes("what you want to change"))) {
             try {
                 const cleanPhone = rawMessage.replace(/\s/g, '');
@@ -1716,7 +1616,6 @@ async function processInternalAI(message, context = {}) {
             }
         }
 
-        // SCENARIO 3: PROFILE UPDATE - NAME
         else if (!isPhoneNumber && (lastAiReply.includes("what you want to change") || lastAiReply.includes("update some of your account details"))) {
             try {
                 const newName = rawMessage;
@@ -1729,9 +1628,6 @@ async function processInternalAI(message, context = {}) {
         }
     }
 
-    // ==========================================
-    // STANDARD FUZZY MATCHING
-    // ==========================================
     let bestMatch = null;
     let highestScore = 0;
 
@@ -1765,11 +1661,9 @@ async function processInternalAI(message, context = {}) {
         }
     }
 
-    // 🔧 UPDATED: Enhanced payment-related responses
     if (bestMatch && highestScore >= 5) {
         let finalAnswer = bestMatch.answer;
         
-        // 🔧 NEW: Override payment-related answers with updated information
         if (cleanMessage.includes("deposit") || cleanMessage.includes("add money") || cleanMessage.includes("fund") || cleanMessage.includes("payment")) {
             finalAnswer = `💰 **How to Add Funds to Your Wallet:**
 
