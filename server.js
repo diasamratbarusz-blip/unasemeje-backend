@@ -40,6 +40,7 @@ const chatBanSchema = new mongoose.Schema({
 const ChatBan = mongoose.models.ChatBan || mongoose.model('ChatBan', chatBanSchema);
 
 // ================= CONFIGURATION & CONSTANTS =================
+const SITE_NAME = "Unasemeje SMM Gains"; // 🎯 Official Website Name
 const ADMIN_EMAIL = (process.env.PAYNECTA_USER_EMAIL || "diasamratbarusz@gmail.com").toLowerCase();
 const ADMIN_PHONE = "0715509440";
 
@@ -130,7 +131,7 @@ if (!process.env.VERCEL) {
     connectDB()
         .then(() => {
             console.log("\n=======================================");
-            console.log("🚀 UNASEMEJE ø DIA SERVER STARTED");
+            console.log(`🚀 ${SITE_NAME} SERVER STARTED`);
             console.log("=======================================\n");
 
             console.log(
@@ -289,8 +290,6 @@ function applyFinalPrice(originalRate, name) {
 /**
  * =========================================
  * 🔧 FIXED: SECURE PAYNECTA WEBHOOK HANDLER
- * Credits deposit to the user who INITIATED the payment,
- * NOT to whoever has that phone number registered
  * =========================================
  */
 const handlePaynectaWebhook = async (req, res) => {
@@ -324,21 +323,20 @@ const handlePaynectaWebhook = async (req, res) => {
 
             if (!pendingDeposit) {
                 console.log(`[WEBHOOK] ⚠️ No pending deposit found for transaction: ${transactionRef}`);
-                console.log(`[WEBHOOK] This might be a duplicate or already processed webhook`);
                 return res.status(200).send("Webhook received but no pending deposit found");
             }
 
             console.log(`[WEBHOOK] ✅ Found pending deposit:`, pendingDeposit);
 
             if (Math.abs(pendingDeposit.amount - amount) > 0.01) {
-                console.log(`[WEBHOOK] ❌ Amount mismatch! Expected: ${pendingDeposit.amount}, Received: ${amount}`);
+                console.log(`[WEBHOOK] ❌ Amount mismatch!`);
                 return res.status(400).send("Amount mismatch");
             }
 
             const user = await User.findById(pendingDeposit.userId);
             
             if (!user) {
-                console.log(`[WEBHOOK] ❌ User not found for deposit: ${pendingDeposit.userId}`);
+                console.log(`[WEBHOOK] ❌ User not found`);
                 return res.status(404).send("User not found");
             }
 
@@ -826,7 +824,7 @@ app.post("/api/user/change-password", auth, async (req, res) => {
 
 /**
  * =========================================
- * SMM SERVICES & ORDERS (FIXED FOR ALL CATEGORIES)
+ * SMM SERVICES & ORDERS
  * =========================================
  */
 app.get("/api/services", async (req, res) => {
@@ -1139,7 +1137,7 @@ app.get("/api/settings", async (req, res) => {
 
 /**
  * =========================================
- * 🎵 AUDIO/SOUND MANAGEMENT ENDPOINTS (FIXED - NO AUTH REQUIRED)
+ * 🎵 AUDIO/SOUND MANAGEMENT ENDPOINTS
  * Admin can control all sounds from admin panel
  * =========================================
  */
@@ -1194,7 +1192,6 @@ app.get("/api/audio/settings", async (req, res) => {
     }
 });
 
-// ✅ FIX APPLIED HERE: Removed 'adminAuth' so the admin panel can access it without a token
 // Admin: Update audio settings
 app.post("/api/admin/audio/settings", async (req, res) => {
     try {
@@ -1252,7 +1249,6 @@ app.post("/api/admin/audio/settings", async (req, res) => {
     }
 });
 
-// ✅ FIX APPLIED HERE: Removed 'adminAuth' so the admin panel can access it without a token
 // Admin: Get all audio settings
 app.get("/api/admin/audio/settings", async (req, res) => {
     try {
@@ -1359,7 +1355,7 @@ app.post("/api/admin/resolve-ticket", async (req, res) => {
 
 /**
  * =========================================
- * TOP TICKER MANAGEMENT (FIXED FOR VERCEL)
+ * TOP TICKER MANAGEMENT
  * =========================================
  */
 app.get("/api/ticker", async (req, res) => {
@@ -1526,11 +1522,6 @@ try {
     console.warn("⚠️ knowledge_base.json not found in root directory. Internal AI will use fallback responses.");
 }
 
-/**
- * =========================================
- * 🔧 UPDATED: AI ENGINE WITH NEW PAYMENT KNOWLEDGE
- * =========================================
- */
 async function processInternalAI(message, context = {}) {
     const cleanMessage = message.toLowerCase().replace(/[^\w\s]/gi, '').trim();
     const rawMessage = message.trim();
@@ -1665,7 +1656,7 @@ async function processInternalAI(message, context = {}) {
         let finalAnswer = bestMatch.answer;
         
         if (cleanMessage.includes("deposit") || cleanMessage.includes("add money") || cleanMessage.includes("fund") || cleanMessage.includes("payment")) {
-            finalAnswer = `💰 **How to Add Funds to Your Wallet:**
+            finalAnswer = `💰 **How to Add Funds to Your Wallet at ${SITE_NAME}:**
 
 Our new payment system is super flexible:
 
@@ -1700,7 +1691,7 @@ Need help? Just ask me or click "Human Support"!`;
         return finalAnswer;
     }
     
-    return `🤔 I might need a bit more detail to give you the perfect answer! As your Unasemeje AI expert, I can help you with:
+    return `🤔 I might need a bit more detail to give you the perfect answer! As your ${SITE_NAME} AI expert, I can help you with:
 
 • 💰 **Deposits** - Use any M-Pesa phone number, instant credit to your account
 • 🚀 **Placing orders** - API access, service pricing, and how to order
@@ -1845,8 +1836,9 @@ app.post("/api/admin/unban-chat", async (req, res) => {
 app.get("/", (req, res) => {
     res.json({ 
         status: "online", 
-        message: "UNASEMEJE API is running successfully.",
-        version: "1.0.0"
+        message: `${SITE_NAME} API is running successfully.`,
+        version: "1.0.0",
+        siteName: SITE_NAME
     });
 });
 
@@ -1856,7 +1848,7 @@ app.get("/favicon.png", (req, res) => res.status(204).end());
 // ================= VERCEL EXPORT CONFIGURATION =================
 if (!process.env.VERCEL) {
     const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => console.log(`🚀 UNASEMEJE ø DIA ONLINE ON PORT ${PORT}`));
+    app.listen(PORT, () => console.log(`🚀 ${SITE_NAME} ONLINE ON PORT ${PORT}`));
 }
 
 module.exports = app;
