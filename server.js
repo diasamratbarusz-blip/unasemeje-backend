@@ -40,7 +40,7 @@ const chatBanSchema = new mongoose.Schema({
 const ChatBan = mongoose.models.ChatBan || mongoose.model('ChatBan', chatBanSchema);
 
 // ================= CONFIGURATION & CONSTANTS =================
-const SITE_NAME = "Unasemeje SMM Gains"; // 🎯 Official Website Name
+const SITE_NAME = "UNASEMEJE SMM GAINS"; // 🎯 Official Website Name
 const ADMIN_EMAIL = (process.env.PAYNECTA_USER_EMAIL || "diasamratbarusz@gmail.com").toLowerCase();
 const ADMIN_PHONE = "0715509440";
 
@@ -94,8 +94,8 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '15mb' })); // Increased to 15MB for Base64 audio uploads
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 app.use(express.static(path.join(__dirname, "public")));
 
 app.use(paynectaInitializeRoutes);
@@ -1296,6 +1296,179 @@ app.get("/api/admin/audio/settings", async (req, res) => {
     } catch (err) {
         console.error('Admin audio settings fetch error:', err);
         res.status(500).json({ error: 'Failed to fetch audio settings' });
+    }
+});
+
+/**
+ * =========================================
+ * 🎵 NEW: AUDIO FILE UPLOAD ENDPOINT (BASE64 STORAGE)
+ * Converts audio files to Base64 and stores in MongoDB
+ * Works perfectly on Vercel (no file system needed)
+ * =========================================
+ */
+app.post("/api/admin/audio/upload", async (req, res) => {
+    try {
+        const { audioType, audioData, fileName, fileSize } = req.body;
+        
+        console.log(`\n[AUDIO UPLOAD] ====== NEW UPLOAD ======`);
+        console.log(`[AUDIO UPLOAD] Type: ${audioType}`);
+        console.log(`[AUDIO UPLOAD] File: ${fileName}`);
+        console.log(`[AUDIO UPLOAD] Size: ${(fileSize / 1024 / 1024).toFixed(2)} MB`);
+        
+        // Validation
+        if (!audioType || !audioData) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "Missing audio type or data" 
+            });
+        }
+        
+        // Check file size (max 10MB for Base64 storage)
+        if (fileSize > 10 * 1024 * 1024) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "File too large. Maximum size is 10MB." 
+            });
+        }
+        
+        // Validate Base64 data URL format
+        if (!audioData.startsWith('data:audio/')) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "Invalid audio file format. Please upload MP3, WAV, or OGG files." 
+            });
+        }
+        
+        // Determine the correct setting key
+        const settingKeyMap = {
+            'bgMusic': 'bg_music_url',
+            'welcomeVoice': 'welcome_voice_url',
+            'successSound': 'success_sound_url',
+            'notificationSound': 'notification_sound_url',
+            'loginSound': 'login_sound_url'
+        };
+        
+        const settingKey = settingKeyMap[audioType];
+        if (!settingKey) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "Invalid audio type" 
+            });
+        }
+        
+        // Store the Base64 data URL in the Setting collection
+        await Setting.findOneAndUpdate(
+            { key: settingKey },
+            { 
+                value: audioData,
+                fileName: fileName,
+                fileSize: fileSize,
+                uploadedAt: new Date()
+            },
+            { upsert: true, new: true }
+        );
+        
+        console.log(`[AUDIO UPLOAD] ✅ Saved ${audioType} to database`);
+        log(`ADMIN UPLOADED AUDIO: ${audioType} (${fileName})`);
+        
+        res.json({ 
+            success: true, 
+            message: "Audio file uploaded successfully",
+            url: audioData,
+            fileName: fileName,
+            fileSize: fileSize
+        });
+        
+    } catch (error) {
+        console.error(`[AUDIO UPLOAD] ❌ Error:`, error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message || "Failed to upload audio file" 
+        });
+    }
+});
+
+/**
+ * =========================================
+ * 🎵 NEW: GET UPLOADED AUDIO FILES INFO
+ * Returns metadata about uploaded files
+ * =========================================
+ */
+app.get("/api/admin/audio/files", async (req, res) => {
+    try {
+        const settings = await Setting.find({ 
+            key: { $in: [
+                'bg_music_url', 
+                'welcome_voice_url', 
+                'success_sound_url', 
+                'notification_sound_url', 
+                'login_sound_url'
+            ]}
+        });
+        
+        const files = {};
+        
+        settings.forEach(s => {
+            const isBase64 = s.value && s.value.startsWith('data:audio/');
+            
+            files[s.key] = {
+                url: s.value,
+                isUploaded: isBase64,
+                fileName: s.fileName || null,
+                fileSize: s.fileSize || null,
+                uploadedAt: s.uploadedAt || null
+            };
+        });
+        
+        res.json({ success: true, data: files });
+        
+    } catch (error) {
+        console.error('Audio files fetch error:', error);
+        res.status(500).json({ error: 'Failed to fetch audio files' });
+    }
+});
+
+/**
+ * =========================================
+ * 🎵 NEW: DELETE UPLOADED AUDIO FILE
+ * Removes the Base64 data from database
+ * =========================================
+ */
+app.delete("/api/admin/audio/file/:type", async (req, res) => {
+    try {
+        const { type } = req.params;
+        
+        const settingKeyMap = {
+            'bgMusic': 'bg_music_url',
+            'welcomeVoice': 'welcome_voice_url',
+            'successSound': 'success_sound_url',
+            'notificationSound': 'notification_sound_url',
+            'loginSound': 'login_sound_url'
+        };
+        
+        const settingKey = settingKeyMap[type];
+        if (!settingKey) {
+            return res.status(400).json({ success: false, error: "Invalid audio type" });
+        }
+        
+        await Setting.findOneAndUpdate(
+            { key: settingKey },
+            { 
+                value: '',
+                fileName: null,
+                fileSize: null,
+                uploadedAt: null
+            }
+        );
+        
+        console.log(`[AUDIO DELETE] ✅ Deleted ${type}`);
+        log(`ADMIN DELETED AUDIO FILE: ${type}`);
+        
+        res.json({ success: true, message: "Audio file deleted successfully" });
+        
+    } catch (error) {
+        console.error(`[AUDIO DELETE] ❌ Error:`, error);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
