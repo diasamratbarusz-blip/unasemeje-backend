@@ -145,25 +145,33 @@ ServiceSchema.pre("save", function (next) {
 });
 
 /* ================= BEFORE UPDATE HOOK ================= */
-ServiceSchema.pre("findOneAndUpdate", function (next) {
+ServiceSchema.pre("findOneAndUpdate", async function (next) {
   try {
     const update = this.getUpdate();
 
-    if (update.rate || update.name) {
-      const name = update.name || "";
-      const rate = update.rate || 0;
+    // If an explicit override is being passed or prices are changing
+    if (update.rate !== undefined || update.name !== undefined) {
+      // Fetch the document currently in DB to fall back on existing fields safely
+      const existingDoc = await this.model.findOne(this.getQuery());
+
+      const currentName = update.name !== undefined ? update.name : (existingDoc ? existingDoc.name : "");
+      const currentRate = update.rate !== undefined ? update.rate : (existingDoc ? existingDoc.rate : 0);
 
       let markup = 40;
-      const n = name.toLowerCase();
+      const n = (currentName || "").toLowerCase();
 
-      // Ensure updates maintain specific markup tiers
+      // Ensure updates maintain specific markup tiers safely
       if (n.includes("like")) markup = 30; 
       else if (n.includes("follower")) markup = 25; 
       else if (n.includes("view")) markup = 35; 
       else if (n.includes("save")) markup = 40;
 
-      update.sellingRate = rate + markup;
-      update.originalRate = rate;
+      update.sellingRate = Number(currentRate) + markup;
+
+      // Only preserve originalRate if it wasn't set yet in the database
+      if (existingDoc && !existingDoc.originalRate) {
+        update.originalRate = currentRate;
+      }
     }
 
     next();
