@@ -265,15 +265,22 @@ function cleanServiceName(name = "") {
     return String(name || "").replace(/\\/g, "").trim() || "SMM Service";
 }
 
+/**
+ * 🔧 FIXED PLATFORM DETECTION LOGIC
+ * Explicitly structures matches for exact platform tokens first, 
+ * preventing generic features from polluting specific category filters.
+ */
 function detectPlatform(service = {}) {
     const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
     
     if (/(instagram|insta|ig)/.test(text)) return "Instagram";
     if (/(tiktok|tik tok|tt)/.test(text)) return "TikTok";
     if (/(youtube|yt)/.test(text)) return "YouTube";
-    if (/(facebook|fb|post likes|post views|post comments|page likes|page followers|video views|reel|story)/.test(text)) return "Facebook";
     if (/(twitter|x\.com|x post|retweet)/.test(text)) return "Twitter/X";
     if (/(telegram|tg)/.test(text)) return "Telegram";
+    
+    // Check Facebook last so general keywords like "reel" or "views" don't hijack other platforms
+    if (/(facebook|fb|post likes|post views|post comments|page likes|page followers|video views|reel|story)/.test(text)) return "Facebook";
     
     return "Other";
 }
@@ -850,7 +857,7 @@ app.get("/api/services", async (req, res) => {
                     const serviceName = cleanServiceName(s.name);
                     const platform = detectPlatform(s);
                     
-                    console.log(`📝 Service: "${serviceName}" | Category: "${categoryName}" | Platform: ${platform}`);
+                    console.log(`... Service: "${serviceName}" | Category: "${categoryName}" | Platform: ${platform}`);
                     
                     return {
                         serviceId: String(s.service),
@@ -1368,7 +1375,7 @@ app.post("/api/admin/audio/upload", async (req, res) => {
             { upsert: true, new: true }
         );
         
-        console.log(`[AUDIO UPLOAD] ✅ Saved ${audioType} to database`);
+        console.log(`[AUDIO UPLOAD]  Saved ${audioType} to database`);
         log(`ADMIN UPLOADED AUDIO: ${audioType} (${fileName})`);
         
         res.json({ 
