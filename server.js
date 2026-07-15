@@ -1546,7 +1546,22 @@ app.post("/api/admin/seo/settings", async (req, res) => {
 // Upload SEO preview asset (base64 image storage, Vercel compatible)
 app.post("/api/admin/seo/upload", async (req, res) => {
     try {
-        const { imageType, imageData, fileName, fileSize } = req.body;
+        let { imageType, imageData, fileName, fileSize } = req.body;
+
+        // 🔧 ROBUST PRE-VALIDATION CHECK:
+        // Automatically search alternative request payload keys if frontend sends image or file directly
+        if (!imageData) {
+            imageData = req.body.image || req.body.file || req.body.data;
+        }
+        if (!imageType) {
+            imageType = req.body.type || "ogImage"; // Defaults gracefully to prevent crashing
+        }
+        if (!fileName) {
+            fileName = req.body.name || "seo-visual-asset";
+        }
+        if (!fileSize) {
+            fileSize = req.body.size || (imageData ? Buffer.byteLength(imageData, 'utf8') : 0);
+        }
 
         if (!imageType || !imageData) {
             return res.status(400).json({ success: false, error: "Missing metadata properties." });
