@@ -52,6 +52,9 @@ const seoSchema = new mongoose.Schema({
 });
 const SeoSettings = mongoose.models.SeoSettings || mongoose.model('SeoSettings', seoSchema);
 
+// Fixed ID to guarantee exactly ONE permanent SEO document in MongoDB
+const FIXED_SEO_ID = new mongoose.Types.ObjectId("60c72b2f9b1d8b2d88a12345");
+
 // ================= CONFIGURATION & CONSTANTS =================
 const SITE_NAME = "UNASEMEJE SMM GAINS"; // 🎯 Official Website Name
 const ADMIN_EMAIL = (process.env.PAYNECTA_USER_EMAIL || "diasamratbarusz@gmail.com").toLowerCase();
@@ -1502,10 +1505,10 @@ app.delete("/api/admin/audio/file/:type", async (req, res) => {
 // Get current SEO settings (Public access)
 app.get("/api/admin/seo/settings", async (req, res) => {
     try {
-        let settings = await SeoSettings.findOne();
+        let settings = await SeoSettings.findById(FIXED_SEO_ID);
         if (!settings) {
-            // Create default settings on first load if missing
-            settings = await SeoSettings.create({});
+            // Create single default settings document if it doesn't exist
+            settings = await SeoSettings.create({ _id: FIXED_SEO_ID });
         }
         res.json({ success: true, data: settings });
     } catch (err) {
@@ -1519,9 +1522,9 @@ app.post("/api/admin/seo/settings", async (req, res) => {
     try {
         const { title, metaDescription, metaKeywords, ogTitle, ogDescription, ogImage, favicon } = req.body;
         
-        let settings = await SeoSettings.findOne();
+        let settings = await SeoSettings.findById(FIXED_SEO_ID);
         if (!settings) {
-            settings = new SeoSettings();
+            settings = new SeoSettings({ _id: FIXED_SEO_ID });
         }
 
         if (title !== undefined) settings.title = title;
@@ -1571,10 +1574,10 @@ app.post("/api/admin/seo/upload", async (req, res) => {
             return res.status(400).json({ success: false, error: "Upload size limit surpassed. Max limit is 5MB." });
         }
 
-        // Find existing SEO settings document or instantiate a new one to save into database permanently
-        let settings = await SeoSettings.findOne();
+        // Find existing SEO settings document via FIXED ID to guarantee exactly ONE permanent document
+        let settings = await SeoSettings.findById(FIXED_SEO_ID);
         if (!settings) {
-            settings = new SeoSettings();
+            settings = new SeoSettings({ _id: FIXED_SEO_ID });
         }
 
         if (imageType === "ogImage") {
