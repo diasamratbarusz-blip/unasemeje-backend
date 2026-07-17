@@ -46,14 +46,11 @@ const seoSchema = new mongoose.Schema({
     metaKeywords: { type: String, default: "smm, panel, marketing, followers, views" },
     ogTitle: { type: String, default: "UNASEMEJE SMM GAINS" },
     ogDescription: { type: String, default: "Get instant SMM services, followers, and engagement metrics." },
-    ogImage: { type: String, default: "" }, // Base64 formatted or absolute URL path (Saved permanently to MongoDB)
-    favicon: { type: String, default: "" }, // Base64 formatted or absolute URL path (Saved permanently to MongoDB)
+    ogImage: { type: String, default: "" }, // Base64 formatted or absolute URL path
+    favicon: { type: String, default: "" }, // Base64 formatted or absolute URL path
     updatedAt: { type: Date, default: Date.now }
 });
 const SeoSettings = mongoose.models.SeoSettings || mongoose.model('SeoSettings', seoSchema);
-
-// Fixed ID to guarantee exactly ONE permanent SEO document in MongoDB
-const FIXED_SEO_ID = new mongoose.Types.ObjectId("60c72b2f9b1d8b2d88a12345");
 
 // ================= CONFIGURATION & CONSTANTS =================
 const SITE_NAME = "UNASEMEJE SMM GAINS"; // 🎯 Official Website Name
@@ -1505,10 +1502,10 @@ app.delete("/api/admin/audio/file/:type", async (req, res) => {
 // Get current SEO settings (Public access)
 app.get("/api/admin/seo/settings", async (req, res) => {
     try {
-        let settings = await SeoSettings.findById(FIXED_SEO_ID);
+        let settings = await SeoSettings.findOne();
         if (!settings) {
-            // Create single default settings document if it doesn't exist
-            settings = await SeoSettings.create({ _id: FIXED_SEO_ID });
+            // Create default settings on first load if missing
+            settings = await SeoSettings.create({});
         }
         res.json({ success: true, data: settings });
     } catch (err) {
@@ -1522,9 +1519,9 @@ app.post("/api/admin/seo/settings", async (req, res) => {
     try {
         const { title, metaDescription, metaKeywords, ogTitle, ogDescription, ogImage, favicon } = req.body;
         
-        let settings = await SeoSettings.findById(FIXED_SEO_ID);
+        let settings = await SeoSettings.findOne();
         if (!settings) {
-            settings = new SeoSettings({ _id: FIXED_SEO_ID });
+            settings = new SeoSettings();
         }
 
         if (title !== undefined) settings.title = title;
@@ -1546,7 +1543,7 @@ app.post("/api/admin/seo/settings", async (req, res) => {
     }
 });
 
-// Upload SEO preview asset (base64 image storage, Vercel compatible - SAVED PERMANENTLY IN MONGODB)
+// Upload SEO preview asset (base64 image storage, Vercel compatible)
 app.post("/api/admin/seo/upload", async (req, res) => {
     try {
         let { imageType, imageData, fileName, fileSize } = req.body;
@@ -1574,10 +1571,9 @@ app.post("/api/admin/seo/upload", async (req, res) => {
             return res.status(400).json({ success: false, error: "Upload size limit surpassed. Max limit is 5MB." });
         }
 
-        // Find existing SEO settings document via FIXED ID to guarantee exactly ONE permanent document
-        let settings = await SeoSettings.findById(FIXED_SEO_ID);
+        let settings = await SeoSettings.findOne();
         if (!settings) {
-            settings = new SeoSettings({ _id: FIXED_SEO_ID });
+            settings = new SeoSettings();
         }
 
         if (imageType === "ogImage") {
@@ -1588,9 +1584,7 @@ app.post("/api/admin/seo/upload", async (req, res) => {
             return res.status(400).json({ success: false, error: "Invalid visual element key. Use 'ogImage' or 'favicon'." });
         }
 
-        settings.updatedAt = new Date();
-        await settings.save(); // Image is permanently saved here to your MongoDB instance!
-
+        await settings.save();
         log(`ADMIN UPLOADED SEO COMPONENT: ${imageType} (${fileName})`);
 
         res.json({ success: true, message: "SEO media saved successfully.", url: imageData });
