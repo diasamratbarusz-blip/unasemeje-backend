@@ -39,19 +39,6 @@ const chatBanSchema = new mongoose.Schema({
 });
 const ChatBan = mongoose.models.ChatBan || mongoose.model('ChatBan', chatBanSchema);
 
-// ================= SEO CONFIGURATION MODELS =================
-const seoSchema = new mongoose.Schema({
-    title: { type: String, default: "UNASEMEJE SMM GAINS" },
-    metaDescription: { type: String, default: "Get instant SMM services, followers, and engagement metrics." },
-    metaKeywords: { type: String, default: "smm, panel, marketing, followers, views" },
-    ogTitle: { type: String, default: "UNASEMEJE SMM GAINS" },
-    ogDescription: { type: String, default: "Get instant SMM services, followers, and engagement metrics." },
-    ogImage: { type: String, default: "" }, // Base64 formatted or absolute URL path (Saved permanently to MongoDB)
-    favicon: { type: String, default: "" }, // Base64 formatted or absolute URL path (Saved permanently to MongoDB)
-    updatedAt: { type: Date, default: Date.now }
-});
-const SeoSettings = mongoose.models.SeoSettings || mongoose.model('SeoSettings', seoSchema);
-
 // ================= CONFIGURATION & CONSTANTS =================
 const SITE_NAME = "UNASEMEJE SMM GAINS"; // 🎯 Official Website Name
 const ADMIN_EMAIL = (process.env.PAYNECTA_USER_EMAIL || "diasamratbarusz@gmail.com").toLowerCase();
@@ -107,7 +94,7 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(express.json({ limit: '15mb' })); // Increased to 15MB for Base64 audio uploads and SEO images
+app.use(express.json({ limit: '15mb' })); // Increased to 15MB for Base64 audio uploads
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -1489,111 +1476,6 @@ app.delete("/api/admin/audio/file/:type", async (req, res) => {
     } catch (error) {
         console.error(`[AUDIO DELETE] ❌ Error:`, error);
         res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-/**
- * =========================================
- * SEO SETTINGS ENDPOINTS
- * Admin controls site SEO configurations (Title, Description, Favicon, OG tags)
- * =========================================
- */
-
-// Get current SEO settings (Public access)
-app.get("/api/admin/seo/settings", async (req, res) => {
-    try {
-        let settings = await SeoSettings.findOne();
-        if (!settings) {
-            // Create default settings on first load if missing
-            settings = await SeoSettings.create({});
-        }
-        res.json({ success: true, data: settings });
-    } catch (err) {
-        console.error("SEO settings fetch error:", err);
-        res.status(500).json({ error: "Failed to fetch SEO settings." });
-    }
-});
-
-// Update/Save SEO Settings (Admin secure route)
-app.post("/api/admin/seo/settings", async (req, res) => {
-    try {
-        const { title, metaDescription, metaKeywords, ogTitle, ogDescription, ogImage, favicon } = req.body;
-        
-        let settings = await SeoSettings.findOne();
-        if (!settings) {
-            settings = new SeoSettings();
-        }
-
-        if (title !== undefined) settings.title = title;
-        if (metaDescription !== undefined) settings.metaDescription = metaDescription;
-        if (metaKeywords !== undefined) settings.metaKeywords = metaKeywords;
-        if (ogTitle !== undefined) settings.ogTitle = ogTitle;
-        if (ogDescription !== undefined) settings.ogDescription = ogDescription;
-        if (ogImage !== undefined) settings.ogImage = ogImage;
-        if (favicon !== undefined) settings.favicon = favicon;
-        
-        settings.updatedAt = new Date();
-        await settings.save();
-
-        log(`ADMIN UPDATED SEO CONFIGURATIONS`);
-        res.json({ success: true, message: "SEO Settings updated successfully.", data: settings });
-    } catch (err) {
-        console.error("SEO settings update error:", err);
-        res.status(500).json({ error: "Failed to update SEO configurations." });
-    }
-});
-
-// Upload SEO preview asset (base64 image storage, Vercel compatible - SAVED PERMANENTLY IN MONGODB)
-app.post("/api/admin/seo/upload", async (req, res) => {
-    try {
-        let { imageType, imageData, fileName, fileSize } = req.body;
-
-        // 🔧 ROBUST PRE-VALIDATION CHECK:
-        // Automatically search alternative request payload keys if frontend sends image or file directly
-        if (!imageData) {
-            imageData = req.body.image || req.body.file || req.body.data;
-        }
-        if (!imageType) {
-            imageType = req.body.type || "ogImage"; // Defaults gracefully to prevent crashing
-        }
-        if (!fileName) {
-            fileName = req.body.name || "seo-visual-asset";
-        }
-        if (!fileSize) {
-            fileSize = req.body.size || (imageData ? Buffer.byteLength(imageData, 'utf8') : 0);
-        }
-
-        if (!imageType || !imageData) {
-            return res.status(400).json({ success: false, error: "Missing metadata properties." });
-        }
-
-        if (fileSize > 5 * 1024 * 1024) {
-            return res.status(400).json({ success: false, error: "Upload size limit surpassed. Max limit is 5MB." });
-        }
-
-        // Find existing SEO settings document or instantiate a new one to save into database permanently
-        let settings = await SeoSettings.findOne();
-        if (!settings) {
-            settings = new SeoSettings();
-        }
-
-        if (imageType === "ogImage") {
-            settings.ogImage = imageData;
-        } else if (imageType === "favicon") {
-            settings.favicon = imageData;
-        } else {
-            return res.status(400).json({ success: false, error: "Invalid visual element key. Use 'ogImage' or 'favicon'." });
-        }
-
-        settings.updatedAt = new Date();
-        await settings.save(); // Image is permanently saved here to your MongoDB instance!
-
-        log(`ADMIN UPLOADED SEO COMPONENT: ${imageType} (${fileName})`);
-
-        res.json({ success: true, message: "SEO media saved successfully.", url: imageData });
-    } catch (err) {
-        console.error("SEO asset upload error:", err);
-        res.status(500).json({ error: "Failed to complete asset upload." });
     }
 });
 
