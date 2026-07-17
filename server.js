@@ -46,8 +46,8 @@ const seoSchema = new mongoose.Schema({
     metaKeywords: { type: String, default: "smm, panel, marketing, followers, views" },
     ogTitle: { type: String, default: "UNASEMEJE SMM GAINS" },
     ogDescription: { type: String, default: "Get instant SMM services, followers, and engagement metrics." },
-    ogImage: { type: String, default: "" }, // Base64 formatted or absolute URL path
-    favicon: { type: String, default: "" }, // Base64 formatted or absolute URL path
+    ogImage: { type: String, default: "" }, // Base64 formatted or absolute URL path (Saved permanently to MongoDB)
+    favicon: { type: String, default: "" }, // Base64 formatted or absolute URL path (Saved permanently to MongoDB)
     updatedAt: { type: Date, default: Date.now }
 });
 const SeoSettings = mongoose.models.SeoSettings || mongoose.model('SeoSettings', seoSchema);
@@ -1543,7 +1543,7 @@ app.post("/api/admin/seo/settings", async (req, res) => {
     }
 });
 
-// Upload SEO preview asset (base64 image storage, Vercel compatible)
+// Upload SEO preview asset (base64 image storage, Vercel compatible - SAVED PERMANENTLY IN MONGODB)
 app.post("/api/admin/seo/upload", async (req, res) => {
     try {
         let { imageType, imageData, fileName, fileSize } = req.body;
@@ -1571,6 +1571,7 @@ app.post("/api/admin/seo/upload", async (req, res) => {
             return res.status(400).json({ success: false, error: "Upload size limit surpassed. Max limit is 5MB." });
         }
 
+        // Find existing SEO settings document or instantiate a new one to save into database permanently
         let settings = await SeoSettings.findOne();
         if (!settings) {
             settings = new SeoSettings();
@@ -1584,7 +1585,9 @@ app.post("/api/admin/seo/upload", async (req, res) => {
             return res.status(400).json({ success: false, error: "Invalid visual element key. Use 'ogImage' or 'favicon'." });
         }
 
-        await settings.save();
+        settings.updatedAt = new Date();
+        await settings.save(); // Image is permanently saved here to your MongoDB instance!
+
         log(`ADMIN UPLOADED SEO COMPONENT: ${imageType} (${fileName})`);
 
         res.json({ success: true, message: "SEO media saved successfully.", url: imageData });
