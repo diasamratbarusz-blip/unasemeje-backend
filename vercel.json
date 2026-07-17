@@ -2,10 +2,6 @@
   "version": 2,
   "rewrites": [
     {
-      "source": "/assets/(.*)",
-      "destination": "/public/assets/$1"
-    },
-    {
       "source": "/api/(.*)",
       "destination": "/server.js"
     },
