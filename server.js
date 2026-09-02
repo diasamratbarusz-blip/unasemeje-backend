@@ -209,13 +209,13 @@ async function verifyPaynecta() {
 function auth(req, res, next) {
     try {
         const header = req.headers.authorization;
-        if (!header) return res.status(401).json({ error: "Access denied. No token provided." });
+        if (!header) return res.status(401).json({ error: "Access denied. Login required." });
         const token = header.split(" ")[1];
         if (!token) return res.status(401).json({ error: "Invalid authorization token" });
         req.user = jwt.verify(token, process.env.JWT_SECRET);
         next();
     } catch (err) {
-        return res.status(401).json({ error: "Invalid or expired token" });
+        return res.status(401).json({ error: "Invalid or expired session. Please log in again." });
     }
 }
 
@@ -710,7 +710,7 @@ app.get("/api/paynecta/status", auth, async (req, res) => {
 
 /**
  * =========================================
- * USER AUTH
+ * USER AUTH & USER-SPECIFIC DETAILS
  * =========================================
  */
 app.post("/api/register", async (req, res) => {
@@ -790,12 +790,72 @@ app.post("/api/login", async (req, res) => {
     }
 });
 
+/**
+ * FETCH LOGGED-IN SPECIFIC USER ACCOUNT DETAILS
+ * Returns exact user details for Create Panel and account pages.
+ */
 app.get("/api/me", auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select("-password");
+        if (!user) return res.status(404).json({ error: "User account not found." });
         res.json(user);
     } catch (err) {
-        res.status(500).json({ error: "Failed to fetch profile." });
+        res.status(500).json({ error: "Failed to fetch user profile." });
+    }
+});
+
+app.get("/api/user/details", auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select("-password");
+        if (!user) return res.status(404).json({ error: "User account not found." });
+        
+        res.json({
+            success: true,
+            user: {
+                id: user._id,
+                username: user.username,
+                email: user.email,
+                phone: user.phone,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                balance: user.balance,
+                referralCode: user.referralCode,
+                referredBy: user.referredBy,
+                paymentProfileName: user.paymentProfileName,
+                paymentProfileEmail: user.paymentProfileEmail,
+                paymentPhones: [user.paymentPhone1, user.paymentPhone2, user.paymentPhone3].filter(Boolean)
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch user details." });
+    }
+});
+
+/**
+ * SPECIFIC CREATE PANEL ACCOUNT ENDPOINT
+ * Ensures visitor is logged in and returns specific visitor account details
+ */
+app.get("/api/panel/details", auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select("-password");
+        if (!user) return res.status(404).json({ error: "User not found. Please log in first." });
+
+        res.json({
+            success: true,
+            message: "User identity verified for panel creation.",
+            user: {
+                id: user._id,
+                username: user.username,
+                email: user.email,
+                phone: user.phone,
+                balance: user.balance,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                referralCode: user.referralCode
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to load user-specific panel details." });
     }
 });
 
