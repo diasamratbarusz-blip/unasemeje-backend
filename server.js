@@ -990,7 +990,7 @@ app.post("/api/deposit", auth, async (req, res) => {
 // SUPREME ADMIN ROUTES
 // ==========================================
 
-app.get("/api/admin/users", async (req, res) => {
+app.get("/api/admin/users", adminAuth, async (req, res) => {
     try {
         res.json(await User.find().select("-password").sort({ createdAt: -1 }));
     } catch (err) {
@@ -998,7 +998,7 @@ app.get("/api/admin/users", async (req, res) => {
     }
 });
 
-app.get("/api/admin/deposits", async (req, res) => {
+app.get("/api/admin/deposits", adminAuth, async (req, res) => {
     try {
         res.json(await Deposit.find().sort({ createdAt: -1 }));
     } catch (err) {
@@ -1006,7 +1006,7 @@ app.get("/api/admin/deposits", async (req, res) => {
     }
 });
 
-app.get("/api/admin/orders", async (req, res) => {
+app.get("/api/admin/orders", adminAuth, async (req, res) => {
     try {
         res.json(await Order.find().sort({ createdAt: -1 }));
     } catch (err) {
@@ -1014,7 +1014,7 @@ app.get("/api/admin/orders", async (req, res) => {
     }
 });
 
-app.post("/api/admin/approve-deposit", async (req, res) => {
+app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
     try {
         const dep = await Deposit.findById(req.body.depositId);
         if (dep && (dep.status === "pending" || dep.status === "failed")) {
@@ -1032,7 +1032,7 @@ app.post("/api/admin/approve-deposit", async (req, res) => {
     }
 });
 
-app.post("/api/admin/cancel-deposit", async (req, res) => {
+app.post("/api/admin/cancel-deposit", adminAuth, async (req, res) => {
     try {
         const dep = await Deposit.findById(req.body.depositId);
         if (dep && (dep.status === "pending" || dep.status === "failed")) {
@@ -1047,7 +1047,7 @@ app.post("/api/admin/cancel-deposit", async (req, res) => {
     }
 });
 
-app.post("/api/admin/update-balance", async (req, res) => {
+app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
     try {
         const { userId, amount } = req.body;
         const user = await User.findById(userId);
@@ -1064,11 +1064,14 @@ app.post("/api/admin/update-balance", async (req, res) => {
 // --- GLOBAL SITE CONTROL ---
 const settingSchema = new mongoose.Schema({
     key: { type: String, unique: true },
-    value: mongoose.Schema.Types.Mixed
+    value: mongoose.Schema.Types.Mixed,
+    fileName: String,
+    fileSize: Number,
+    uploadedAt: Date
 });
 const Setting = mongoose.models.Setting || mongoose.model('Setting', settingSchema);
 
-app.post("/api/admin/announce", async (req, res) => {
+app.post("/api/admin/announce", adminAuth, async (req, res) => {
     try {
         const { message } = req.body;
         await Setting.findOneAndUpdate(
@@ -1083,7 +1086,7 @@ app.post("/api/admin/announce", async (req, res) => {
     }
 });
 
-app.post("/api/admin/maintenance", async (req, res) => {
+app.post("/api/admin/maintenance", adminAuth, async (req, res) => {
     try {
         const { action } = req.body;
         let newState;
@@ -1109,7 +1112,7 @@ app.post("/api/admin/maintenance", async (req, res) => {
     }
 });
 
-app.post("/api/admin/clear-cache", async (req, res) => {
+app.post("/api/admin/clear-cache", adminAuth, async (req, res) => {
     try {
         log("ADMIN CLEARED SYSTEM CACHE");
         res.json({ success: true, message: "Cache cleared." });
@@ -1118,7 +1121,7 @@ app.post("/api/admin/clear-cache", async (req, res) => {
     }
 });
 
-app.post("/api/admin/reset-failed", async (req, res) => {
+app.post("/api/admin/reset-failed", adminAuth, async (req, res) => {
     try {
         const result = await Order.updateMany(
             { status: { $in: ["failed", "error", "canceled"] } },
@@ -1200,7 +1203,7 @@ app.get("/api/audio/settings", async (req, res) => {
 });
 
 // Admin: Update audio settings
-app.post("/api/admin/audio/settings", async (req, res) => {
+app.post("/api/admin/audio/settings", adminAuth, async (req, res) => {
     try {
         const { 
             bgMusicEnabled, bgMusicUrl, bgMusicVolume,
@@ -1257,7 +1260,7 @@ app.post("/api/admin/audio/settings", async (req, res) => {
 });
 
 // Admin: Get all audio settings
-app.get("/api/admin/audio/settings", async (req, res) => {
+app.get("/api/admin/audio/settings", adminAuth, async (req, res) => {
     try {
         const settings = await Setting.find({ 
             key: { $in: [
@@ -1313,7 +1316,7 @@ app.get("/api/admin/audio/settings", async (req, res) => {
  * Works perfectly on Vercel (no file system needed)
  * =========================================
  */
-app.post("/api/admin/audio/upload", async (req, res) => {
+app.post("/api/admin/audio/upload", adminAuth, async (req, res) => {
     try {
         const { audioType, audioData, fileName, fileSize } = req.body;
         
@@ -1375,7 +1378,7 @@ app.post("/api/admin/audio/upload", async (req, res) => {
             { upsert: true, new: true }
         );
         
-        console.log(`[AUDIO UPLOAD]  Saved ${audioType} to database`);
+        console.log(`[AUDIO UPLOAD] Saved ${audioType} to database`);
         log(`ADMIN UPLOADED AUDIO: ${audioType} (${fileName})`);
         
         res.json({ 
@@ -1401,7 +1404,7 @@ app.post("/api/admin/audio/upload", async (req, res) => {
  * Returns metadata about uploaded files
  * =========================================
  */
-app.get("/api/admin/audio/files", async (req, res) => {
+app.get("/api/admin/audio/files", adminAuth, async (req, res) => {
     try {
         const settings = await Setting.find({ 
             key: { $in: [
@@ -1441,7 +1444,7 @@ app.get("/api/admin/audio/files", async (req, res) => {
  * Removes the Base64 data from database
  * =========================================
  */
-app.delete("/api/admin/audio/file/:type", async (req, res) => {
+app.delete("/api/admin/audio/file/:type", adminAuth, async (req, res) => {
     try {
         const { type } = req.params;
         
@@ -1514,7 +1517,7 @@ app.post("/api/support-ticket", auth, async (req, res) => {
     }
 });
 
-app.get("/api/admin/tickets", async (req, res) => {
+app.get("/api/admin/tickets", adminAuth, async (req, res) => {
     try {
         const tickets = await Ticket.find().sort({ createdAt: -1 });
         res.json(tickets);
@@ -1523,7 +1526,7 @@ app.get("/api/admin/tickets", async (req, res) => {
     }
 });
 
-app.post("/api/admin/resolve-ticket", async (req, res) => {
+app.post("/api/admin/resolve-ticket", adminAuth, async (req, res) => {
     try {
         const { ticketId } = req.body;
         await Ticket.findByIdAndUpdate(ticketId, { status: 'Closed' });
@@ -1553,7 +1556,7 @@ app.get("/api/ticker", async (req, res) => {
     }
 });
 
-app.get("/api/admin/ticker", async (req, res) => {
+app.get("/api/admin/ticker", adminAuth, async (req, res) => {
     try {
         const itemsDoc = await Setting.findOne({ key: "ticker_items" });
         const speedDoc = await Setting.findOne({ key: "ticker_speed" });
@@ -1568,7 +1571,7 @@ app.get("/api/admin/ticker", async (req, res) => {
     }
 });
 
-app.post("/api/admin/ticker/add", async (req, res) => {
+app.post("/api/admin/ticker/add", adminAuth, async (req, res) => {
     try {
         const { text } = req.body;
         
@@ -1599,7 +1602,7 @@ app.post("/api/admin/ticker/add", async (req, res) => {
     }
 });
 
-app.put("/api/admin/ticker/edit", async (req, res) => {
+app.put("/api/admin/ticker/edit", adminAuth, async (req, res) => {
     try {
         const { index, text } = req.body;
         
@@ -1632,7 +1635,7 @@ app.put("/api/admin/ticker/edit", async (req, res) => {
     }
 });
 
-app.delete("/api/admin/ticker/delete", async (req, res) => {
+app.delete("/api/admin/ticker/delete", adminAuth, async (req, res) => {
     try {
         const { index } = req.body;
         
@@ -1664,7 +1667,7 @@ app.delete("/api/admin/ticker/delete", async (req, res) => {
     }
 });
 
-app.put("/api/admin/ticker/speed", async (req, res) => {
+app.put("/api/admin/ticker/speed", adminAuth, async (req, res) => {
     try {
         const { speed } = req.body;
         
@@ -1977,7 +1980,7 @@ app.post("/api/support-bot", auth, async (req, res) => {
  * ADMIN CHAT SECURITY & MODERATION
  * =========================================
  */
-app.get("/api/admin/chat-logs", async (req, res) => {
+app.get("/api/admin/chat-logs", adminAuth, async (req, res) => {
     try {
         const logs = await ChatLog.find().sort({ createdAt: -1 }).limit(100);
         const bans = await ChatBan.find({ expiresAt: { $gt: Date.now() } });
@@ -1986,7 +1989,7 @@ app.get("/api/admin/chat-logs", async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Failed to fetch logs" }); }
 });
 
-app.post("/api/admin/ban-chat", async (req, res) => {
+app.post("/api/admin/ban-chat", adminAuth, async (req, res) => {
     try {
         const { userId, reason } = req.body;
         const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
@@ -1999,7 +2002,7 @@ app.post("/api/admin/ban-chat", async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Failed to ban user" }); }
 });
 
-app.post("/api/admin/unban-chat", async (req, res) => {
+app.post("/api/admin/unban-chat", adminAuth, async (req, res) => {
     try {
         const { userId } = req.body;
         await ChatBan.deleteOne({ userId });
