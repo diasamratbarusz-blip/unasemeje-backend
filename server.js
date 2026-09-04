@@ -778,12 +778,25 @@ app.post("/api/login", async (req, res) => {
         if (!isMatch) return res.status(400).json({ error: "Invalid login" });
 
         const token = jwt.sign(
-            { id: user._id, email: user.email, phone: user.phone }, 
+            { id: user._id, email: user.email, phone: user.phone, username: user.username }, 
             process.env.JWT_SECRET, 
             { expiresIn: "7d" }
         );
         
-        res.json({ token, balance: user.balance });
+        res.json({ 
+            token, 
+            balance: user.balance,
+            user: {
+                id: user._id,
+                username: user.username,
+                email: user.email,
+                phone: user.phone,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                balance: user.balance,
+                referralCode: user.referralCode
+            }
+        });
     } catch (err) {
         console.error("Login error:", err);
         res.status(500).json({ error: "Login failed" });
@@ -792,13 +805,20 @@ app.post("/api/login", async (req, res) => {
 
 /**
  * FETCH LOGGED-IN SPECIFIC USER ACCOUNT DETAILS
- * Returns exact user details for Create Panel and account pages.
+ * Returns exact dynamic session details for dashboard.html, Create Panel, and account pages.
  */
 app.get("/api/me", auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select("-password");
         if (!user) return res.status(404).json({ error: "User account not found." });
-        res.json(user);
+        
+        const userObj = user.toObject();
+        userObj.paymentPhones = [user.paymentPhone1, user.paymentPhone2, user.paymentPhone3].filter(Boolean);
+        res.json({
+            success: true,
+            ...userObj,
+            user: userObj
+        });
     } catch (err) {
         res.status(500).json({ error: "Failed to fetch user profile." });
     }
@@ -833,7 +853,7 @@ app.get("/api/user/details", auth, async (req, res) => {
 
 /**
  * SPECIFIC CREATE PANEL ACCOUNT ENDPOINT
- * Ensures visitor is logged in and returns specific visitor account details
+ * Ensures visitor is logged in and returns dynamic visitor account details from dashboard.html
  */
 app.get("/api/panel/details", auth, async (req, res) => {
     try {
@@ -851,7 +871,11 @@ app.get("/api/panel/details", auth, async (req, res) => {
                 balance: user.balance,
                 firstName: user.firstName,
                 lastName: user.lastName,
-                referralCode: user.referralCode
+                referralCode: user.referralCode,
+                referredBy: user.referredBy,
+                paymentProfileName: user.paymentProfileName,
+                paymentProfileEmail: user.paymentProfileEmail,
+                paymentPhones: [user.paymentPhone1, user.paymentPhone2, user.paymentPhone3].filter(Boolean)
             }
         });
     } catch (err) {
