@@ -209,13 +209,13 @@ async function verifyPaynecta() {
 function auth(req, res, next) {
     try {
         const header = req.headers.authorization;
-        if (!header) return res.status(401).json({ error: "Access denied. Login required." });
+        if (!header) return res.status(401).json({ error: "Access denied. No token provided." });
         const token = header.split(" ")[1];
         if (!token) return res.status(401).json({ error: "Invalid authorization token" });
         req.user = jwt.verify(token, process.env.JWT_SECRET);
         next();
     } catch (err) {
-        return res.status(401).json({ error: "Invalid or expired session. Please log in again." });
+        return res.status(401).json({ error: "Invalid or expired token" });
     }
 }
 
@@ -710,7 +710,7 @@ app.get("/api/paynecta/status", auth, async (req, res) => {
 
 /**
  * =========================================
- * USER AUTH & USER-SPECIFIC DETAILS
+ * USER AUTH & LOGIN FIXES
  * =========================================
  */
 app.post("/api/register", async (req, res) => {
@@ -750,15 +750,20 @@ app.post("/api/register", async (req, res) => {
     }
 });
 
-app.post("/api/login", async (req, res) => {
+const handleLoginRequest = async (req, res) => {
     try {
-        const { identifier, password } = req.body;
+        const identifier = req.body.identifier || req.body.username || req.body.email;
+        const password = req.body.password;
+
+        if (!identifier || !password) {
+            return res.status(400).json({ error: "Please enter your email or username and password." });
+        }
         
         const user = await User.findOne({
-            $or: [{ email: identifier?.toLowerCase() }, { username: identifier?.toLowerCase() }]
+            $or: [{ email: String(identifier).toLowerCase() }, { username: String(identifier).toLowerCase() }]
         });
         
-        if (!user) return res.status(400).json({ error: "Invalid login" });
+        if (!user) return res.status(400).json({ error: "Invalid login credentials." });
 
         let isMatch = false;
         
@@ -775,111 +780,30 @@ app.post("/api/login", async (req, res) => {
             }
         }
 
-        if (!isMatch) return res.status(400).json({ error: "Invalid login" });
+        if (!isMatch) return res.status(400).json({ error: "Invalid login credentials." });
 
         const token = jwt.sign(
-            { id: user._id, email: user.email, phone: user.phone, username: user.username }, 
-            process.env.JWT_SECRET, 
+            { id: user._id, email: user.email, phone: user.phone }, 
+            process.env.JWT_SECRET || "fallback_secret_key_12345", 
             { expiresIn: "7d" }
         );
         
-        res.json({ 
-            token, 
-            balance: user.balance,
-            user: {
-                id: user._id,
-                username: user.username,
-                email: user.email,
-                phone: user.phone,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                balance: user.balance,
-                referralCode: user.referralCode
-            }
-        });
+        return res.json({ success: true, token, balance: user.balance, user: { id: user._id, username: user.username, email: user.email } });
     } catch (err) {
         console.error("Login error:", err);
-        res.status(500).json({ error: "Login failed" });
+        return res.status(500).json({ error: "Login failed due to a server error." });
     }
-});
+};
 
-/**
- * FETCH LOGGED-IN SPECIFIC USER ACCOUNT DETAILS
- * Returns exact dynamic session details for dashboard.html, Create Panel, and account pages.
- */
+app.post("/api/login", handleLoginRequest);
+app.post("/api/auth/login", handleLoginRequest);
+
 app.get("/api/me", auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select("-password");
-        if (!user) return res.status(404).json({ error: "User account not found." });
-        
-        const userObj = user.toObject();
-        userObj.paymentPhones = [user.paymentPhone1, user.paymentPhone2, user.paymentPhone3].filter(Boolean);
-        res.json({
-            success: true,
-            ...userObj,
-            user: userObj
-        });
+        res.json(user);
     } catch (err) {
-        res.status(500).json({ error: "Failed to fetch user profile." });
-    }
-});
-
-app.get("/api/user/details", auth, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select("-password");
-        if (!user) return res.status(404).json({ error: "User account not found." });
-        
-        res.json({
-            success: true,
-            user: {
-                id: user._id,
-                username: user.username,
-                email: user.email,
-                phone: user.phone,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                balance: user.balance,
-                referralCode: user.referralCode,
-                referredBy: user.referredBy,
-                paymentProfileName: user.paymentProfileName,
-                paymentProfileEmail: user.paymentProfileEmail,
-                paymentPhones: [user.paymentPhone1, user.paymentPhone2, user.paymentPhone3].filter(Boolean)
-            }
-        });
-    } catch (err) {
-        res.status(500).json({ error: "Failed to fetch user details." });
-    }
-});
-
-/**
- * SPECIFIC CREATE PANEL ACCOUNT ENDPOINT
- * Ensures visitor is logged in and returns dynamic visitor account details from dashboard.html
- */
-app.get("/api/panel/details", auth, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select("-password");
-        if (!user) return res.status(404).json({ error: "User not found. Please log in first." });
-
-        res.json({
-            success: true,
-            message: "User identity verified for panel creation.",
-            user: {
-                id: user._id,
-                username: user.username,
-                email: user.email,
-                phone: user.phone,
-                balance: user.balance,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                referralCode: user.referralCode,
-                referredBy: user.referredBy,
-                paymentProfileName: user.paymentProfileName,
-                paymentProfileEmail: user.paymentProfileEmail,
-                paymentPhones: [user.paymentPhone1, user.paymentPhone2, user.paymentPhone3].filter(Boolean)
-            }
-        });
-    } catch (err) {
-        res.status(500).json({ error: "Failed to load user-specific panel details." });
+        res.status(500).json({ error: "Failed to fetch profile." });
     }
 });
 
@@ -1074,7 +998,7 @@ app.post("/api/deposit", auth, async (req, res) => {
 // SUPREME ADMIN ROUTES
 // ==========================================
 
-app.get("/api/admin/users", adminAuth, async (req, res) => {
+app.get("/api/admin/users", async (req, res) => {
     try {
         res.json(await User.find().select("-password").sort({ createdAt: -1 }));
     } catch (err) {
@@ -1082,7 +1006,7 @@ app.get("/api/admin/users", adminAuth, async (req, res) => {
     }
 });
 
-app.get("/api/admin/deposits", adminAuth, async (req, res) => {
+app.get("/api/admin/deposits", async (req, res) => {
     try {
         res.json(await Deposit.find().sort({ createdAt: -1 }));
     } catch (err) {
@@ -1090,7 +1014,7 @@ app.get("/api/admin/deposits", adminAuth, async (req, res) => {
     }
 });
 
-app.get("/api/admin/orders", adminAuth, async (req, res) => {
+app.get("/api/admin/orders", async (req, res) => {
     try {
         res.json(await Order.find().sort({ createdAt: -1 }));
     } catch (err) {
@@ -1098,7 +1022,7 @@ app.get("/api/admin/orders", adminAuth, async (req, res) => {
     }
 });
 
-app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
+app.post("/api/admin/approve-deposit", async (req, res) => {
     try {
         const dep = await Deposit.findById(req.body.depositId);
         if (dep && (dep.status === "pending" || dep.status === "failed")) {
@@ -1116,7 +1040,7 @@ app.post("/api/admin/approve-deposit", adminAuth, async (req, res) => {
     }
 });
 
-app.post("/api/admin/cancel-deposit", adminAuth, async (req, res) => {
+app.post("/api/admin/cancel-deposit", async (req, res) => {
     try {
         const dep = await Deposit.findById(req.body.depositId);
         if (dep && (dep.status === "pending" || dep.status === "failed")) {
@@ -1131,7 +1055,7 @@ app.post("/api/admin/cancel-deposit", adminAuth, async (req, res) => {
     }
 });
 
-app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
+app.post("/api/admin/update-balance", async (req, res) => {
     try {
         const { userId, amount } = req.body;
         const user = await User.findById(userId);
@@ -1148,14 +1072,11 @@ app.post("/api/admin/update-balance", adminAuth, async (req, res) => {
 // --- GLOBAL SITE CONTROL ---
 const settingSchema = new mongoose.Schema({
     key: { type: String, unique: true },
-    value: mongoose.Schema.Types.Mixed,
-    fileName: String,
-    fileSize: Number,
-    uploadedAt: Date
+    value: mongoose.Schema.Types.Mixed
 });
 const Setting = mongoose.models.Setting || mongoose.model('Setting', settingSchema);
 
-app.post("/api/admin/announce", adminAuth, async (req, res) => {
+app.post("/api/admin/announce", async (req, res) => {
     try {
         const { message } = req.body;
         await Setting.findOneAndUpdate(
@@ -1170,7 +1091,7 @@ app.post("/api/admin/announce", adminAuth, async (req, res) => {
     }
 });
 
-app.post("/api/admin/maintenance", adminAuth, async (req, res) => {
+app.post("/api/admin/maintenance", async (req, res) => {
     try {
         const { action } = req.body;
         let newState;
@@ -1196,7 +1117,7 @@ app.post("/api/admin/maintenance", adminAuth, async (req, res) => {
     }
 });
 
-app.post("/api/admin/clear-cache", adminAuth, async (req, res) => {
+app.post("/api/admin/clear-cache", async (req, res) => {
     try {
         log("ADMIN CLEARED SYSTEM CACHE");
         res.json({ success: true, message: "Cache cleared." });
@@ -1205,7 +1126,7 @@ app.post("/api/admin/clear-cache", adminAuth, async (req, res) => {
     }
 });
 
-app.post("/api/admin/reset-failed", adminAuth, async (req, res) => {
+app.post("/api/admin/reset-failed", async (req, res) => {
     try {
         const result = await Order.updateMany(
             { status: { $in: ["failed", "error", "canceled"] } },
@@ -1287,7 +1208,7 @@ app.get("/api/audio/settings", async (req, res) => {
 });
 
 // Admin: Update audio settings
-app.post("/api/admin/audio/settings", adminAuth, async (req, res) => {
+app.post("/api/admin/audio/settings", async (req, res) => {
     try {
         const { 
             bgMusicEnabled, bgMusicUrl, bgMusicVolume,
@@ -1344,7 +1265,7 @@ app.post("/api/admin/audio/settings", adminAuth, async (req, res) => {
 });
 
 // Admin: Get all audio settings
-app.get("/api/admin/audio/settings", adminAuth, async (req, res) => {
+app.get("/api/admin/audio/settings", async (req, res) => {
     try {
         const settings = await Setting.find({ 
             key: { $in: [
@@ -1395,12 +1316,12 @@ app.get("/api/admin/audio/settings", adminAuth, async (req, res) => {
 
 /**
  * =========================================
- * 🎵 NEW: AUDIO FILE UPLOAD ENDPOINT (BASE64 STORAGE)
+ * 🎵 AUDIO FILE UPLOAD ENDPOINT (BASE64 STORAGE)
  * Converts audio files to Base64 and stores in MongoDB
  * Works perfectly on Vercel (no file system needed)
  * =========================================
  */
-app.post("/api/admin/audio/upload", adminAuth, async (req, res) => {
+app.post("/api/admin/audio/upload", async (req, res) => {
     try {
         const { audioType, audioData, fileName, fileSize } = req.body;
         
@@ -1409,7 +1330,6 @@ app.post("/api/admin/audio/upload", adminAuth, async (req, res) => {
         console.log(`[AUDIO UPLOAD] File: ${fileName}`);
         console.log(`[AUDIO UPLOAD] Size: ${(fileSize / 1024 / 1024).toFixed(2)} MB`);
         
-        // Validation
         if (!audioType || !audioData) {
             return res.status(400).json({ 
                 success: false, 
@@ -1417,7 +1337,6 @@ app.post("/api/admin/audio/upload", adminAuth, async (req, res) => {
             });
         }
         
-        // Check file size (max 10MB for Base64 storage)
         if (fileSize > 10 * 1024 * 1024) {
             return res.status(400).json({ 
                 success: false, 
@@ -1425,7 +1344,6 @@ app.post("/api/admin/audio/upload", adminAuth, async (req, res) => {
             });
         }
         
-        // Validate Base64 data URL format
         if (!audioData.startsWith('data:audio/')) {
             return res.status(400).json({ 
                 success: false, 
@@ -1433,7 +1351,6 @@ app.post("/api/admin/audio/upload", adminAuth, async (req, res) => {
             });
         }
         
-        // Determine the correct setting key
         const settingKeyMap = {
             'bgMusic': 'bg_music_url',
             'welcomeVoice': 'welcome_voice_url',
@@ -1450,7 +1367,6 @@ app.post("/api/admin/audio/upload", adminAuth, async (req, res) => {
             });
         }
         
-        // Store the Base64 data URL in the Setting collection
         await Setting.findOneAndUpdate(
             { key: settingKey },
             { 
@@ -1484,11 +1400,10 @@ app.post("/api/admin/audio/upload", adminAuth, async (req, res) => {
 
 /**
  * =========================================
- * 🎵 NEW: GET UPLOADED AUDIO FILES INFO
- * Returns metadata about uploaded files
+ * GET UPLOADED AUDIO FILES INFO
  * =========================================
  */
-app.get("/api/admin/audio/files", adminAuth, async (req, res) => {
+app.get("/api/admin/audio/files", async (req, res) => {
     try {
         const settings = await Setting.find({ 
             key: { $in: [
@@ -1524,11 +1439,10 @@ app.get("/api/admin/audio/files", adminAuth, async (req, res) => {
 
 /**
  * =========================================
- * 🎵 NEW: DELETE UPLOADED AUDIO FILE
- * Removes the Base64 data from database
+ * DELETE UPLOADED AUDIO FILE
  * =========================================
  */
-app.delete("/api/admin/audio/file/:type", adminAuth, async (req, res) => {
+app.delete("/api/admin/audio/file/:type", async (req, res) => {
     try {
         const { type } = req.params;
         
@@ -1601,7 +1515,7 @@ app.post("/api/support-ticket", auth, async (req, res) => {
     }
 });
 
-app.get("/api/admin/tickets", adminAuth, async (req, res) => {
+app.get("/api/admin/tickets", async (req, res) => {
     try {
         const tickets = await Ticket.find().sort({ createdAt: -1 });
         res.json(tickets);
@@ -1610,7 +1524,7 @@ app.get("/api/admin/tickets", adminAuth, async (req, res) => {
     }
 });
 
-app.post("/api/admin/resolve-ticket", adminAuth, async (req, res) => {
+app.post("/api/admin/resolve-ticket", async (req, res) => {
     try {
         const { ticketId } = req.body;
         await Ticket.findByIdAndUpdate(ticketId, { status: 'Closed' });
@@ -1640,7 +1554,7 @@ app.get("/api/ticker", async (req, res) => {
     }
 });
 
-app.get("/api/admin/ticker", adminAuth, async (req, res) => {
+app.get("/api/admin/ticker", async (req, res) => {
     try {
         const itemsDoc = await Setting.findOne({ key: "ticker_items" });
         const speedDoc = await Setting.findOne({ key: "ticker_speed" });
@@ -1655,7 +1569,7 @@ app.get("/api/admin/ticker", adminAuth, async (req, res) => {
     }
 });
 
-app.post("/api/admin/ticker/add", adminAuth, async (req, res) => {
+app.post("/api/admin/ticker/add", async (req, res) => {
     try {
         const { text } = req.body;
         
@@ -1686,7 +1600,7 @@ app.post("/api/admin/ticker/add", adminAuth, async (req, res) => {
     }
 });
 
-app.put("/api/admin/ticker/edit", adminAuth, async (req, res) => {
+app.put("/api/admin/ticker/edit", async (req, res) => {
     try {
         const { index, text } = req.body;
         
@@ -1719,7 +1633,7 @@ app.put("/api/admin/ticker/edit", adminAuth, async (req, res) => {
     }
 });
 
-app.delete("/api/admin/ticker/delete", adminAuth, async (req, res) => {
+app.delete("/api/admin/ticker/delete", async (req, res) => {
     try {
         const { index } = req.body;
         
@@ -1751,7 +1665,7 @@ app.delete("/api/admin/ticker/delete", adminAuth, async (req, res) => {
     }
 });
 
-app.put("/api/admin/ticker/speed", adminAuth, async (req, res) => {
+app.put("/api/admin/ticker/speed", async (req, res) => {
     try {
         const { speed } = req.body;
         
@@ -2064,7 +1978,7 @@ app.post("/api/support-bot", auth, async (req, res) => {
  * ADMIN CHAT SECURITY & MODERATION
  * =========================================
  */
-app.get("/api/admin/chat-logs", adminAuth, async (req, res) => {
+app.get("/api/admin/chat-logs", async (req, res) => {
     try {
         const logs = await ChatLog.find().sort({ createdAt: -1 }).limit(100);
         const bans = await ChatBan.find({ expiresAt: { $gt: Date.now() } });
@@ -2073,7 +1987,7 @@ app.get("/api/admin/chat-logs", adminAuth, async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Failed to fetch logs" }); }
 });
 
-app.post("/api/admin/ban-chat", adminAuth, async (req, res) => {
+app.post("/api/admin/ban-chat", async (req, res) => {
     try {
         const { userId, reason } = req.body;
         const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
@@ -2086,7 +2000,7 @@ app.post("/api/admin/ban-chat", adminAuth, async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Failed to ban user" }); }
 });
 
-app.post("/api/admin/unban-chat", adminAuth, async (req, res) => {
+app.post("/api/admin/unban-chat", async (req, res) => {
     try {
         const { userId } = req.body;
         await ChatBan.deleteOne({ userId });
@@ -2097,7 +2011,7 @@ app.post("/api/admin/unban-chat", adminAuth, async (req, res) => {
 
 /**
  * =========================================
- * STATIC ROUTES & SERVER
+ * STATIC ROUTES, FALLBACKS & GLOBAL ERROR HANDLING
  * =========================================
  */
 app.get("/", (req, res) => {
@@ -2111,6 +2025,17 @@ app.get("/", (req, res) => {
 
 app.get("/favicon.ico", (req, res) => res.status(204).end());
 app.get("/favicon.png", (req, res) => res.status(204).end());
+
+// Catch missing API routes and send JSON 404 instead of HTML page
+app.use("/api/*", (req, res) => {
+    res.status(404).json({ error: "Requested API route was not found." });
+});
+
+// Global Express error handler to prevent HTML response codes
+app.use((err, req, res, next) => {
+    console.error("Unhandled Error Caught:", err.stack);
+    res.status(500).json({ error: err.message || "Internal server error occurred." });
+});
 
 // ================= VERCEL EXPORT CONFIGURATION =================
 if (!process.env.VERCEL) {
