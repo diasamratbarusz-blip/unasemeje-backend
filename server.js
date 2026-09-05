@@ -798,10 +798,42 @@ const handleLoginRequest = async (req, res) => {
 app.post("/api/login", handleLoginRequest);
 app.post("/api/auth/login", handleLoginRequest);
 
+/**
+ * 🔧 FIXED USER PROFILE ENDPOINT FOR CREATE-PANEL AND OTHER FRONTEND UI HOOKS
+ * Explicitly formats and provides aliases so that frontend apps requiring 
+ * email, phone, name, and username fields receive valid strings without defaulting to N/A.
+ */
 app.get("/api/me", auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select("-password");
-        res.json(user);
+        if (!user) return res.status(404).json({ error: "User not found." });
+
+        const userObj = user.toObject();
+        
+        const resolvedPhone = userObj.phone || userObj.paymentPhone1 || userObj.paymentPhone2 || userObj.paymentPhone3 || "";
+        const resolvedName = userObj.paymentProfileName || [userObj.firstName, userObj.lastName].filter(Boolean).join(" ") || userObj.username || userObj.email || "Account Owner";
+
+        const profileData = {
+            ...userObj,
+            success: true,
+            id: userObj._id,
+            name: resolvedName,
+            username: userObj.username || "Account Owner",
+            email: userObj.email || "",
+            phone: resolvedPhone,
+            whatsapp: resolvedPhone,
+            user: {
+                ...userObj,
+                id: userObj._id,
+                name: resolvedName,
+                username: userObj.username || "Account Owner",
+                email: userObj.email || "",
+                phone: resolvedPhone,
+                whatsapp: resolvedPhone
+            }
+        };
+
+        res.json(profileData);
     } catch (err) {
         res.status(500).json({ error: "Failed to fetch profile." });
     }
