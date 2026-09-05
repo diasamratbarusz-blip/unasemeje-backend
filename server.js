@@ -793,72 +793,9 @@ app.post("/api/login", async (req, res) => {
 app.get("/api/me", auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select("-password");
-        if (!user) return res.status(404).json({ error: "User not found." });
-        
-        const totalOrders = await Order.countDocuments({ userId: req.user.id });
-        const totalDepositsDoc = await Deposit.aggregate([
-            { $match: { userId: new mongoose.Types.ObjectId(req.user.id), status: "completed" } },
-            { $group: { _id: null, total: { $sum: "$amount" } } }
-        ]);
-        const totalDeposited = totalDepositsDoc.length > 0 ? totalDepositsDoc[0].total : 0;
-
-        const userObj = user.toObject();
-        userObj.totalOrders = totalOrders;
-        userObj.totalDeposited = totalDeposited;
-
-        res.json(userObj);
+        res.json(user);
     } catch (err) {
         res.status(500).json({ error: "Failed to fetch profile." });
-    }
-});
-
-/**
- * =========================================
- * 🎯 CREATE PANEL PAGE: FETCH REAL BACKEND DETAILS
- * Fetches complete real-time backend account details for Create Panel page
- * =========================================
- */
-app.get("/api/user/account-details", auth, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select("-password");
-        if (!user) {
-            return res.status(404).json({ success: false, error: "User profile not found." });
-        }
-
-        const totalOrders = await Order.countDocuments({ userId: req.user.id });
-        const activeOrders = await Order.countDocuments({ userId: req.user.id, status: { $in: ["pending", "processing", "inprogress"] } });
-        
-        const depositAggregation = await Deposit.aggregate([
-            { $match: { userId: new mongoose.Types.ObjectId(req.user.id), status: "completed" } },
-            { $group: { _id: null, totalSpentOrDeposited: { $sum: "$amount" } } }
-        ]);
-        
-        const totalDeposited = depositAggregation.length > 0 ? depositAggregation[0].totalSpentOrDeposited : 0;
-
-        res.json({
-            success: true,
-            account: {
-                id: user._id,
-                username: user.username || "N/A",
-                email: user.email,
-                phone: user.phone || "N/A",
-                firstName: user.firstName || "",
-                lastName: user.lastName || "",
-                balance: user.balance || 0,
-                formattedBalance: `KES ${(user.balance || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-                paymentPhones: [user.paymentPhone1, user.paymentPhone2, user.paymentPhone3].filter(Boolean),
-                referralCode: user.referralCode || "",
-                referralEarnings: user.referralEarnings || 0,
-                apiKey: user.apiKey || process.env.SMM_API_KEY || "N/A",
-                totalOrders: totalOrders,
-                activeOrders: activeOrders,
-                totalDeposited: totalDeposited,
-                createdAt: user.createdAt
-            }
-        });
-    } catch (err) {
-        console.error("Account Details Fetch Error:", err);
-        res.status(500).json({ success: false, error: "Failed to fetch real account details from backend." });
     }
 });
 
