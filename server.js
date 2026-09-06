@@ -21,11 +21,19 @@ const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
+// ================= SUBSCRIPTION PLANS CONFIG =================
+const SUBSCRIPTION_PLANS = {
+    starter: { name: "Starter Panel", amount: 2500 },
+    pro: { name: "Pro Panel", amount: 4500 },
+    ultimate: { name: "Ultimate Panel", amount: 8500 }
+};
+
 // ================= ACTIVATION CODES MODEL =================
 const activationCodeSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     userEmail: String,
     code: { type: String, required: true, unique: true },
+    planType: { type: String, enum: ['starter', 'pro', 'ultimate', 'custom'], default: 'custom' },
     serviceName: { type: String, default: "General Service" },
     amount: { type: Number, default: 0 },
     status: { type: String, enum: ['active', 'used', 'expired'], default: 'active' },
@@ -359,11 +367,13 @@ app.post("/api/activation-codes/redeem", auth, async (req, res) => {
 
         activeCode.status = "used";
         activeCode.usedAt = new Date();
+        activeCode.userId = user._id;
+        activeCode.userEmail = user.email;
         await activeCode.save();
 
         res.json({
             success: true,
-            message: `Successfully redeemed code for KES ${activeCode.amount}!`,
+            message: `Successfully redeemed code for ${activeCode.serviceName} (KES ${activeCode.amount})!`,
             newBalance: user.balance
         });
     } catch (err) {
@@ -372,19 +382,31 @@ app.post("/api/activation-codes/redeem", auth, async (req, res) => {
     }
 });
 
+// Admin generate activation code mapped to plans or custom amounts
 app.post("/api/admin/activation-codes/generate", adminAuth, async (req, res) => {
     try {
-        const { amount, serviceName, count } = req.body;
+        const { planType, amount, serviceName, count } = req.body;
         const numToGenerate = parseInt(count) || 1;
-        const codeAmount = Number(amount) || 0;
         const generatedCodes = [];
 
+        let resolvedAmount = Number(amount) || 0;
+        let resolvedServiceName = serviceName || "Platform Voucher";
+        let resolvedPlan = planType || "custom";
+
+        if (planType && SUBSCRIPTION_PLANS[planType.toLowerCase()]) {
+            const plan = SUBSCRIPTION_PLANS[planType.toLowerCase()];
+            resolvedAmount = plan.amount;
+            resolvedServiceName = plan.name;
+            resolvedPlan = planType.toLowerCase();
+        }
+
         for (let i = 0; i < numToGenerate; i++) {
-            const rawCode = "ACT-" + crypto.randomBytes(4).toString("hex").toUpperCase();
+            const rawCode = "ACT-" + crypto.randomBytes(6).toString("hex").toUpperCase();
             const newCode = await ActivationCode.create({
                 code: rawCode,
-                amount: codeAmount,
-                serviceName: serviceName || "Platform Voucher",
+                planType: resolvedPlan,
+                amount: resolvedAmount,
+                serviceName: resolvedServiceName,
                 status: "active"
             });
             generatedCodes.push(newCode);
