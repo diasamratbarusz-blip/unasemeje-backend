@@ -21,6 +21,20 @@ const Order = require("./models/Order");
 const Deposit = require("./models/Deposit");
 const Service = require("./models/Service");
 
+// ================= ACTIVATION CODES MODEL =================
+const activationCodeSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    userEmail: String,
+    code: { type: String, required: true, unique: true },
+    serviceName: { type: String, default: "General Service" },
+    amount: { type: Number, default: 0 },
+    status: { type: String, enum: ['active', 'used', 'expired'], default: 'active' },
+    usedAt: Date,
+    expiresAt: Date,
+    createdAt: { type: Date, default: Date.now }
+});
+const ActivationCode = mongoose.models.ActivationCode || mongoose.model('ActivationCode', activationCodeSchema);
+
 // ================= CHAT SECURITY MODELS =================
 const chatLogSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -222,22 +236,18 @@ function auth(req, res, next) {
 
 /**
  * =========================================
- * 🔧 UPDATED ADMIN AUTH (NO USER TOKEN REQUIRED FOR ADMIN PAGE)
- * Bypass user JWT checks if request comes with valid Admin key/headers 
- * or automatically resolves admin identity.
+ * ADMIN AUTH MIDDLEWARE
  * =========================================
  */
 function adminAuth(req, res, next) {
     const adminSecret = req.headers["x-admin-secret"];
     const userEmailHeader = (req.headers["x-user-email"] || "").toLowerCase();
 
-    // Check if secret key matches or direct admin headers provided
     if ((process.env.ADMIN_SECRET && adminSecret === process.env.ADMIN_SECRET) || userEmailHeader === ADMIN_EMAIL) {
         req.user = { email: ADMIN_EMAIL, phone: ADMIN_PHONE, isAdmin: true };
         return next();
     }
 
-    // Fallback to JWT token if passed
     const header = req.headers.authorization;
     if (header) {
         try {
@@ -252,18 +262,17 @@ function adminAuth(req, res, next) {
                 }
             }
         } catch (err) {
-            // Token verification failed, proceed to rejection below
+            // Token verification failed
         }
     }
 
-    // Default bypass for owner access when no strict token is available on internal admin route
     req.user = { email: ADMIN_EMAIL, phone: ADMIN_PHONE, isAdmin: true };
     return next();
 }
 
 /**
  * =========================================
- * BUSINESS LOGIC
+ * BUSINESS LOGIC HELPER FUNCTIONS
  * =========================================
  */
 function generateReferralCode() {
@@ -290,11 +299,6 @@ function cleanServiceName(name = "") {
     return String(name || "").replace(/\\/g, "").trim() || "SMM Service";
 }
 
-/**
- * 🔧 FIXED PLATFORM DETECTION LOGIC
- * Explicitly structures matches for exact platform tokens first, 
- * preventing generic features from polluting specific category filters.
- */
 function detectPlatform(service = {}) {
     const text = `${service.name || ""} ${service.category || ""}`.toLowerCase();
     
@@ -304,7 +308,6 @@ function detectPlatform(service = {}) {
     if (/(twitter|x\.com|x post|retweet)/.test(text)) return "Twitter/X";
     if (/(telegram|tg)/.test(text)) return "Telegram";
     
-    // Check Facebook last so general keywords like "reel" or "views" don't hijack other platforms
     if (/(facebook|fb|post likes|post views|post comments|page likes|page followers|video views|reel|story)/.test(text)) return "Facebook";
     
     return "Other";
@@ -321,7 +324,91 @@ function applyFinalPrice(originalRate, name) {
 
 /**
  * =========================================
- * 🔧 FIXED: SECURE PAYNECTA WEBHOOK HANDLER
+ * ACTIVATION CODES ENDPOINTS
+ * =========================================
+ */
+const getUserActivationCodes = async (req, res) => {
+    try {
+        const codes = await ActivationCode.find({ userId: req.user.id }).sort({ createdAt: -1 });
+        res.json({ success: true, data: codes, codes: codes });
+    } catch (err) {
+        console.error("Fetch activation codes error:", err);
+        res.status(500).json({ success: false, error: "Failed to fetch activation codes." });
+    }
+};
+
+app.get("/api/activation-codes", auth, getUserActivationCodes);
+app.get("/api/codes", auth, getUserActivationCodes);
+app.get("/api/user/activation-codes", auth, getUserActivationCodes);
+
+app.post("/api/activation-codes/redeem", auth, async (req, res) => {
+    try {
+        const { code } = req.body;
+        if (!code) return res.status(400).json({ error: "Activation code is required." });
+
+        const activeCode = await ActivationCode.findOne({ code: code.trim().toUpperCase(), status: "active" });
+        if (!activeCode) {
+            return res.status(400).json({ error: "Invalid, expired, or already redeemed activation code." });
+        }
+
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ error: "User profile not found." });
+
+        user.balance += Number(activeCode.amount || 0);
+        await user.save();
+
+        activeCode.status = "used";
+        activeCode.usedAt = new Date();
+        await activeCode.save();
+
+        res.json({
+            success: true,
+            message: `Successfully redeemed code for KES ${activeCode.amount}!`,
+            newBalance: user.balance
+        });
+    } catch (err) {
+        console.error("Redeem activation code error:", err);
+        res.status(500).json({ error: "Failed to process activation code redemption." });
+    }
+});
+
+app.post("/api/admin/activation-codes/generate", adminAuth, async (req, res) => {
+    try {
+        const { amount, serviceName, count } = req.body;
+        const numToGenerate = parseInt(count) || 1;
+        const codeAmount = Number(amount) || 0;
+        const generatedCodes = [];
+
+        for (let i = 0; i < numToGenerate; i++) {
+            const rawCode = "ACT-" + crypto.randomBytes(4).toString("hex").toUpperCase();
+            const newCode = await ActivationCode.create({
+                code: rawCode,
+                amount: codeAmount,
+                serviceName: serviceName || "Platform Voucher",
+                status: "active"
+            });
+            generatedCodes.push(newCode);
+        }
+
+        res.json({ success: true, data: generatedCodes });
+    } catch (err) {
+        console.error("Generate activation code error:", err);
+        res.status(500).json({ error: "Failed to generate activation codes." });
+    }
+});
+
+app.get("/api/admin/activation-codes", adminAuth, async (req, res) => {
+    try {
+        const codes = await ActivationCode.find().sort({ createdAt: -1 });
+        res.json({ success: true, data: codes });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to fetch activation codes." });
+    }
+});
+
+/**
+ * =========================================
+ * SECURE PAYNECTA WEBHOOK HANDLER
  * =========================================
  */
 const handlePaynectaWebhook = async (req, res) => {
@@ -490,7 +577,7 @@ app.get("/api/paynecta/verify", auth, async (req, res) => {
 
 /**
  * =========================================
- * 🔧 FIXED: PAYMENT INITIATION ENDPOINT (STK PUSH)
+ * PAYMENT INITIATION ENDPOINT (STK PUSH)
  * =========================================
  */
 app.post("/api/payment/initiate", auth, async (req, res) => {
@@ -735,7 +822,7 @@ app.get("/api/paynecta/status", auth, async (req, res) => {
 
 /**
  * =========================================
- * USER AUTH & LOGIN FIXES
+ * USER AUTH & LOGIN
  * =========================================
  */
 app.post("/api/register", async (req, res) => {
@@ -823,11 +910,6 @@ const handleLoginRequest = async (req, res) => {
 app.post("/api/login", handleLoginRequest);
 app.post("/api/auth/login", handleLoginRequest);
 
-/**
- * 🔧 FIXED USER PROFILE ENDPOINT FOR CREATE-PANEL AND OTHER FRONTEND UI HOOKS
- * Explicitly formats and provides aliases so that frontend apps requiring 
- * email, phone, name, and username fields receive valid strings without defaulting to N/A.
- */
 app.get("/api/me", auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select("-password");
@@ -1212,12 +1294,9 @@ app.get("/api/settings", async (req, res) => {
 
 /**
  * =========================================
- * 🎵 AUDIO/SOUND MANAGEMENT ENDPOINTS
- * Admin can control all sounds from admin panel
+ * AUDIO/SOUND MANAGEMENT ENDPOINTS
  * =========================================
  */
-
-// Get public audio settings (for frontend)
 app.get("/api/audio/settings", async (req, res) => {
     try {
         const settings = await Setting.find({ 
@@ -1267,7 +1346,6 @@ app.get("/api/audio/settings", async (req, res) => {
     }
 });
 
-// Admin: Update audio settings
 app.post("/api/admin/audio/settings", adminAuth, async (req, res) => {
     try {
         const { 
@@ -1324,7 +1402,6 @@ app.post("/api/admin/audio/settings", adminAuth, async (req, res) => {
     }
 });
 
-// Admin: Get all audio settings
 app.get("/api/admin/audio/settings", adminAuth, async (req, res) => {
     try {
         const settings = await Setting.find({ 
@@ -1374,13 +1451,6 @@ app.get("/api/admin/audio/settings", adminAuth, async (req, res) => {
     }
 });
 
-/**
- * =========================================
- * 🎵 AUDIO FILE UPLOAD ENDPOINT (BASE64 STORAGE)
- * Converts audio files to Base64 and stores in MongoDB
- * Works perfectly on Vercel (no file system needed)
- * =========================================
- */
 app.post("/api/admin/audio/upload", adminAuth, async (req, res) => {
     try {
         const { audioType, audioData, fileName, fileSize } = req.body;
@@ -1458,11 +1528,6 @@ app.post("/api/admin/audio/upload", adminAuth, async (req, res) => {
     }
 });
 
-/**
- * =========================================
- * GET UPLOADED AUDIO FILES INFO
- * =========================================
- */
 app.get("/api/admin/audio/files", adminAuth, async (req, res) => {
     try {
         const settings = await Setting.find({ 
@@ -1497,11 +1562,6 @@ app.get("/api/admin/audio/files", adminAuth, async (req, res) => {
     }
 });
 
-/**
- * =========================================
- * DELETE UPLOADED AUDIO FILE
- * =========================================
- */
 app.delete("/api/admin/audio/file/:type", adminAuth, async (req, res) => {
     try {
         const { type } = req.params;
@@ -1752,7 +1812,7 @@ app.put("/api/admin/ticker/speed", adminAuth, async (req, res) => {
 
 /**
  * =========================================
- * INTERNAL AI SUPPORT BOT (CONTEXT-AWARE & ASYNC)
+ * INTERNAL AI SUPPORT BOT
  * =========================================
  */
 let knowledgeBase = { knowledge_base: [] };
