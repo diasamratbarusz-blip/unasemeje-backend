@@ -36,6 +36,8 @@ const activationCodeSchema = new mongoose.Schema({
     planType: { type: String, enum: ['starter', 'pro', 'ultimate', 'custom'], default: 'custom' },
     serviceName: { type: String, default: "General Service" },
     amount: { type: Number, default: 0 },
+    maxUses: { type: Number, default: 1 },
+    usedCount: { type: Number, default: 0 },
     status: { type: String, enum: ['active', 'used', 'expired'], default: 'active' },
     usedAt: Date,
     expiresAt: Date,
@@ -365,7 +367,10 @@ app.post("/api/activation-codes/redeem", auth, async (req, res) => {
         user.balance += Number(activeCode.amount || 0);
         await user.save();
 
-        activeCode.status = "used";
+        activeCode.usedCount = (activeCode.usedCount || 0) + 1;
+        if (activeCode.usedCount >= (activeCode.maxUses || 1)) {
+            activeCode.status = "used";
+        }
         activeCode.usedAt = new Date();
         activeCode.userId = user._id;
         activeCode.userEmail = user.email;
@@ -385,8 +390,9 @@ app.post("/api/activation-codes/redeem", auth, async (req, res) => {
 // Admin generate activation code mapped to plans or custom amounts
 app.post("/api/admin/activation-codes/generate", adminAuth, async (req, res) => {
     try {
-        const { planType, amount, serviceName, count } = req.body;
+        const { code, planType, amount, serviceName, count, maxUses } = req.body;
         const numToGenerate = parseInt(count) || 1;
+        const resolvedMaxUses = parseInt(maxUses) || 1;
         const generatedCodes = [];
 
         let resolvedAmount = Number(amount) || 0;
@@ -401,30 +407,48 @@ app.post("/api/admin/activation-codes/generate", adminAuth, async (req, res) => 
         }
 
         for (let i = 0; i < numToGenerate; i++) {
-            const rawCode = "ACT-" + crypto.randomBytes(6).toString("hex").toUpperCase();
+            let rawCode;
+            if (code && numToGenerate === 1) {
+                rawCode = code.trim().toUpperCase();
+            } else {
+                rawCode = "ACT-" + crypto.randomBytes(6).toString("hex").toUpperCase();
+            }
+
             const newCode = await ActivationCode.create({
                 code: rawCode,
                 planType: resolvedPlan,
                 amount: resolvedAmount,
                 serviceName: resolvedServiceName,
+                maxUses: resolvedMaxUses,
                 status: "active"
             });
             generatedCodes.push(newCode);
         }
 
-        res.json({ success: true, data: generatedCodes });
+        res.json({ success: true, data: generatedCodes, codes: generatedCodes });
     } catch (err) {
         console.error("Generate activation code error:", err);
-        res.status(500).json({ error: "Failed to generate activation codes." });
+        res.status(500).json({ error: "Failed to generate activation codes: " + err.message });
     }
 });
 
 app.get("/api/admin/activation-codes", adminAuth, async (req, res) => {
     try {
         const codes = await ActivationCode.find().sort({ createdAt: -1 });
-        res.json({ success: true, data: codes });
+        res.json({ success: true, data: codes, codes: codes });
     } catch (err) {
         res.status(500).json({ error: "Failed to fetch activation codes." });
+    }
+});
+
+app.delete("/api/admin/activation-codes/:id", adminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        await ActivationCode.findByIdAndDelete(id);
+        res.json({ success: true, message: "Activation code deleted successfully." });
+    } catch (err) {
+        console.error("Delete activation code error:", err);
+        res.status(500).json({ error: "Failed to delete activation code." });
     }
 });
 
